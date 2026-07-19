@@ -65,7 +65,7 @@ function recordsToBundle(rawRecords) {
                 password: record.proxy_password,
                 proxyHttp: record.proxy_http,
                 status: record.proxy_status || 'active',
-                accountCapacity: record.account_capacity || 6,
+                accountCapacity: record.account_capacity || 1,
                 egressIp: record.proxy_egress_ip || record.egress_ip,
                 cooldownSeconds: record.cooldown_seconds || 0
             }

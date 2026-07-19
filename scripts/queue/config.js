@@ -15,13 +15,13 @@ export function queueRuntimeConfig() {
     const logMode = (process.env.QUEUE_LOG_MODE || 'compact').trim().toLowerCase()
     if (!['compact', 'verbose', 'silent'].includes(logMode))
         throw new Error('QUEUE_LOG_MODE must be compact, verbose, or silent.')
-    const concurrency = Math.min(positiveInt(process.env.WORKER_CONCURRENCY, 3), 6)
+    const concurrency = positiveInt(process.env.WORKER_CONCURRENCY, 3)
     return {
         backend,
         concurrency,
-        // By default the queue keeps every configured lane busy. Set this to 1
-        // to restore strict one-account-at-a-time serialization per proxy/IP.
-        proxyConcurrency: Math.min(positiveInt(process.env.QUEUE_PROXY_CONCURRENCY, concurrency), concurrency),
+        // Each proxy/egress route gets one slot by default so accounts sharing
+        // a proxy are serialized even when many worker lanes are available.
+        proxyConcurrency: positiveInt(process.env.QUEUE_PROXY_CONCURRENCY, 1),
         pollIntervalMs: Math.max(100, positiveInt(process.env.QUEUE_POLL_INTERVAL_MS, 1000)),
         leaseTtlMs: Math.max(15000, positiveInt(process.env.PROXY_LEASE_TTL_MS, 120000)),
         leaseRetryMs: Math.max(1000, positiveInt(process.env.PROXY_LEASE_RETRY_MS, 15000)),

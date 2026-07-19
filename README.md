@@ -84,9 +84,9 @@ Proxy identity is based on protocol, host, port, and username. Changing `PROXY_H
 npm run accounts -- cleanup-proxies
 ```
 
-Cleanup transfers accounts and stored job references to one surviving proxy inside a transaction before deleting duplicate rows. It refuses and rolls back a merge that would exceed the six-account capacity.
+Cleanup transfers accounts and stored job references to one surviving proxy inside a transaction before deleting duplicate rows.
 
-Files named `accounts*.csv`, `accounts*.txt`, and `accounts*.json` are ignored by Git, except for the safe example files. Re-running import updates matching emails instead of creating duplicates, and import fails if more than six enabled accounts are assigned to one proxy. Queue-time parallelism for each proxy route is controlled separately by `QUEUE_PROXY_CONCURRENCY`.
+Files named `accounts*.csv`, `accounts*.txt`, and `accounts*.json` are ignored by Git, except for the safe example files. Re-running import updates matching emails instead of creating duplicates. Queue-time parallelism for each proxy route is controlled separately by `QUEUE_PROXY_CONCURRENCY`.
 
 ### Local proxy-safe queue
 
@@ -97,7 +97,7 @@ Add these settings to `.env`:
 ```env
 QUEUE_BACKEND=sqlite
 WORKER_CONCURRENCY=3
-QUEUE_PROXY_CONCURRENCY=3
+QUEUE_PROXY_CONCURRENCY=1
 PROXY_LEASE_TTL_MS=120000
 QUEUE_POLL_INTERVAL_MS=1000
 JOB_MAX_ATTEMPTS=3
@@ -127,7 +127,7 @@ npm run queue:worker
 npm run queue:schedule
 ```
 
-`WORKER_CONCURRENCY` is the number of account lanes. With `WORKER_CONCURRENCY=3`, the worker exposes lanes `T01`, `T02`, and `T03`. A lane runs exactly one account process at a time. `QUEUE_PROXY_CONCURRENCY` controls how many accounts may share one proxy/egress route concurrently; its default follows `WORKER_CONCURRENCY`, so the queue keeps all lanes busy while eligible jobs remain. Set it to `1` for strict one-account-at-a-time proxy serialization. The scheduler prefers unused proxy routes before opening a second slot on a busy route. Every running job renews its slot lease; losing ownership aborts its browser process. Expired leases from a crashed worker are recovered and retried up to `JOB_MAX_ATTEMPTS`.
+`WORKER_CONCURRENCY` is the number of account lanes. With `WORKER_CONCURRENCY=3`, the worker exposes lanes `T01`, `T02`, and `T03`. A lane runs exactly one account process at a time. `QUEUE_PROXY_CONCURRENCY` controls how many accounts may share one proxy/egress route concurrently; its default is `1`, so accounts on the same proxy/egress route are serialized. The scheduler keeps distinct proxy routes busy first. Every running job renews its slot lease; losing ownership aborts its browser process. Expired leases from a crashed worker are recovered and retried up to `JOB_MAX_ATTEMPTS`.
 
 By default, a new batch skips accounts that already produced a validated successful `ACCOUNT-END` during the current local day. A completed run with `pointsGained=0` still counts as successful because there may be nothing left to earn. A flow error, missing `ACCOUNT-END`, non-zero process exit, lost lease, or idle timeout counts as failure and is retried up to `JOB_MAX_ATTEMPTS`. Set `QUEUE_SKIP_SUCCEEDED_TODAY=false` to deliberately run successful accounts again on the same day.
 
@@ -148,7 +148,7 @@ Queue environment settings:
 | ------------------------ | -------- | ------------------------------------------------------- |
 | `QUEUE_BACKEND`          | `sqlite` | `sqlite` for local use or `redis` for BullMQ            |
 | `WORKER_CONCURRENCY`     | `3`      | Account lanes; each lane runs one account process       |
-| `QUEUE_PROXY_CONCURRENCY` | same as lanes | Concurrent accounts allowed per proxy/egress route |
+| `QUEUE_PROXY_CONCURRENCY` | `1` | Concurrent accounts allowed per proxy/egress route |
 | `PROXY_LEASE_TTL_MS`     | `120000` | Lease lifetime, renewed every third of the TTL          |
 | `QUEUE_POLL_INTERVAL_MS` | `1000`   | Local worker polling interval                           |
 | `JOB_MAX_ATTEMPTS`       | `3`      | Maximum attempts for a failed account job               |
@@ -168,7 +168,13 @@ To enable or disable an account without editing the import file:
 ```bash
 npm run accounts -- disable user@example.com
 npm run accounts -- enable user@example.com
+npm run accounts -- delete banned@example.com
 ```
+
+`delete` permanently removes the selected account from SQLite, including related
+completed queue records through foreign-key cascades. It refuses to run while the
+account has pending, queued, or running jobs. A deletion marker prevents future
+imports from accidentally creating the account again.
 
 If account values already exist as `ACCOUNT_N_*` entries in `.env`, migrate them once with:
 

@@ -1,6 +1,7 @@
 import { getDirname, getProjectRoot, loadEnvFile, ensureAccountsDatabase, resolveAccountsDbPath } from '../utils.js'
 import {
     cleanupProxyRecords,
+    deleteAccountRecords,
     getAccountStoreStats,
     importAccountBundle,
     listAccountRows,
@@ -23,7 +24,8 @@ function usage() {
   npm run accounts -- stats
   npm run accounts -- cleanup-proxies
   npm run accounts -- enable user@example.com
-  npm run accounts -- disable user@example.com`)
+  npm run accounts -- disable user@example.com
+  npm run accounts -- delete user@example.com [another@example.com ...]`)
 }
 
 try {
@@ -41,6 +43,11 @@ try {
         console.log(
             `Imported ${result.total} account(s): ${result.inserted} inserted, ${result.updated} updated, ${result.proxies} proxy record(s).`
         )
+        if (result.skippedDeleted) {
+            console.log(
+                `Skipped ${result.skippedDeleted} permanently deleted account(s): ${result.skippedDeletedEmails.join(', ')}`
+            )
+        }
         console.log(`Database: ${result.dbPath}`)
         if (result.reconciliation.deletedRecords) {
             console.log(
@@ -62,6 +69,11 @@ try {
         if (!email) throw new Error(`${command} requires an account email.`)
         const result = setAccountStatus(projectRoot, email, command === 'enable' ? 'ready' : 'disabled')
         console.log(`${result.email}: ${result.status}`)
+    } else if (command === 'delete') {
+        if (!args.length) throw new Error('Delete requires at least one account email.')
+        const result = deleteAccountRecords(projectRoot, args)
+        console.log(`Permanently deleted ${result.deleted} account(s): ${result.emails.join(', ')}`)
+        console.log(`Database: ${result.dbPath}`)
     } else {
         usage()
         if (command !== 'help') process.exitCode = 1

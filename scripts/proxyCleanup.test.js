@@ -86,7 +86,7 @@ test('proxy cleanup merges used legacy duplicates and HTTP mode updates in place
     }
 })
 
-test('proxy cleanup rolls back when merging used duplicates would exceed capacity', () => {
+test('proxy cleanup merges duplicates without limiting accounts per proxy', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rewards-proxy-capacity-'))
     process.env.ACCOUNTS_DB_PATH = path.join(tempDir, 'accounts.db')
     process.env.ACCOUNTS_DB_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
@@ -118,10 +118,13 @@ test('proxy cleanup rolls back when merging used duplicates would exceed capacit
         ).run()
         db.close()
 
-        assert.throws(() => cleanupProxyRecords(projectRoot), /has 8 accounts; capacity is 6/)
+        const cleanup = cleanupProxyRecords(projectRoot)
+        assert.equal(cleanup.mergedGroups, 1)
+        assert.equal(cleanup.deletedRecords, 1)
+        assert.equal(cleanup.reassignedAccounts, 4)
         const stats = getAccountStoreStats(projectRoot)
         assert.equal(stats.accounts, 8)
-        assert.equal(stats.proxyRecords, 2)
+        assert.equal(stats.proxyRecords, 1)
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true })
     }

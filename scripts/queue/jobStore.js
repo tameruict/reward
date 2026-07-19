@@ -225,8 +225,8 @@ export class JobStore {
         }
     }
 
-    concurrencyCapacity(maxConcurrency = 6) {
-        const hardLimit = Math.min(Math.max(1, Number(maxConcurrency) || 1), 6)
+    concurrencyCapacity(maxConcurrency = 1) {
+        const requested = Math.max(1, Number(maxConcurrency) || 1)
         const row = this.db
             .prepare(
                 `
@@ -239,7 +239,7 @@ export class JobStore {
             )
             .get()
 
-        return Math.min(hardLimit, Math.max(1, Number(row?.value) || 0))
+        return Math.min(requested, Math.max(1, Number(row?.value) || 0))
     }
 
     claimNextSqliteJob(workerId, leaseTtlMs) {
@@ -535,7 +535,7 @@ export class JobStore {
                 )
                 .all(skipSucceededSince, skipSucceededSince)
 
-            const capacity = Math.max(1, Math.min(Number(proxyConcurrency) || 1, 6))
+            const capacity = Math.max(1, Number(proxyConcurrency) || 1)
             const routeOffsets = new Map()
             const accounts = accountRows.map(account => {
                 const offset = routeOffsets.get(account.route_key) || 0

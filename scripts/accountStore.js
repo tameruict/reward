@@ -50,10 +50,9 @@ function normalizeProxy(raw, fallbackLabel) {
 
     const accountCapacity = positiveInt(
         raw.accountCapacity ?? raw.account_capacity,
-        6,
+        1,
         `Proxy ${label} accountCapacity`
     )
-    if (accountCapacity > 6) fail(`Proxy ${label} accountCapacity cannot exceed 6.`)
 
     const username = text(raw.username)
     const egressIp = text(raw.egressIp ?? raw.egress_ip)
@@ -95,24 +94,6 @@ function assertNoActiveJobs(db) {
             .value
     )
     if (active) fail(`Cannot reconcile proxies while ${active} account job(s) are active.`)
-}
-
-function checkProxyCapacity(db) {
-    const overCapacity = db
-        .prepare(
-            `
-            SELECT p.label, p.account_capacity, COUNT(a.id) AS account_count
-            FROM proxies p
-            JOIN accounts a ON a.proxy_id = p.id AND a.status <> 'disabled'
-            GROUP BY p.id
-            HAVING COUNT(a.id) > p.account_capacity
-        `
-        )
-        .all()
-    if (overCapacity.length) {
-        const row = overCapacity[0]
-        fail(`Proxy ${row.label} has ${row.account_count} accounts; capacity is ${row.account_capacity}.`)
-    }
 }
 
 function reconcileStoredProxies(db) {
@@ -168,7 +149,6 @@ function reconcileStoredProxies(db) {
         )
     }
 
-    checkProxyCapacity(db)
     return { mergedGroups, deletedRecords, reassignedAccounts }
 }
 
@@ -192,10 +172,24 @@ export function cleanupProxyRecords(projectRoot) {
 }
 
 export function importAccountBundle(projectRoot, input) {
-    const bundle = normalizeBundle(input)
+    const normalizedBundle = normalizeBundle(input)
     const dbPath = resolveAccountsDbPath(projectRoot)
     ensureAccountsDatabase(dbPath)
     const db = new DatabaseSync(dbPath)
+
+    const deletedEmails = new Set(
+        db
+            .prepare('SELECT LOWER(email) AS email FROM deleted_accounts')
+            .all()
+            .map(row => row.email)
+    )
+    const skippedDeletedEmails = normalizedBundle.accounts
+        .map(account => text(account?.email).toLowerCase())
+        .filter(email => deletedEmails.has(email))
+    const bundle = {
+        ...normalizedBundle,
+        accounts: normalizedBundle.accounts.filter(account => !deletedEmails.has(text(account?.email).toLowerCase()))
+    }
 
     const proxiesByLabel = new Map()
     const proxyLabelsByIdentity = new Map()
@@ -349,8 +343,6 @@ export function importAccountBundle(projectRoot, input) {
             else inserted += 1
         }
 
-        checkProxyCapacity(db)
-
         db.exec('COMMIT')
         return {
             dbPath,
@@ -358,6 +350,8 @@ export function importAccountBundle(projectRoot, input) {
             updated,
             proxies: proxiesByLabel.size,
             total: bundle.accounts.length,
+            skippedDeleted: skippedDeletedEmails.length,
+            skippedDeletedEmails,
             reconciliation
         }
     } catch (error) {
@@ -399,6 +393,7 @@ export function getAccountStoreStats(projectRoot) {
         return {
             dbPath,
             accounts: Number(db.prepare('SELECT COUNT(*) AS value FROM accounts').get().value),
+            permanentlyDeleted: Number(db.prepare('SELECT COUNT(*) AS value FROM deleted_accounts').get().value),
             readyAccounts: Number(
                 db.prepare("SELECT COUNT(*) AS value FROM accounts WHERE status IN ('ready', 'active')").get().value
             ),
@@ -417,21 +412,7 @@ export function getAccountStoreStats(projectRoot) {
                     )
                     .get().value
             ),
-            overloadedProxies: Number(
-                db
-                    .prepare(
-                        `
-                    SELECT COUNT(*) AS value FROM (
-                        SELECT p.id
-                        FROM proxies p
-                        JOIN accounts a ON a.proxy_id = p.id AND a.status <> 'disabled'
-                        GROUP BY p.id
-                        HAVING COUNT(a.id) > p.account_capacity
-                    )
-                `
-                    )
-                    .get().value
-            )
+            overloadedProxies: 0
         }
     } finally {
         db.close()
@@ -449,6 +430,79 @@ export function setAccountStatus(projectRoot, email, status) {
             .run(status, email)
         if (!result.changes) fail(`Account not found: ${email}.`)
         return { email, status }
+    } finally {
+        db.close()
+    }
+}
+
+export function deleteAccountRecords(projectRoot, emails) {
+    const requestedEmails = [
+        ...new Set((Array.isArray(emails) ? emails : [emails]).map(value => text(value).toLowerCase()))
+    ].filter(Boolean)
+
+    if (!requestedEmails.length) fail('Delete requires at least one account email.')
+    if (requestedEmails.some(email => !email.includes('@'))) fail('Delete requires valid account email addresses.')
+
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath)
+
+    try {
+        db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;')
+
+        const placeholders = requestedEmails.map(() => '?').join(', ')
+        const accounts = db
+            .prepare(
+                `SELECT id, email
+                 FROM accounts
+                 WHERE LOWER(email) IN (${placeholders})
+                 ORDER BY LOWER(email)`
+            )
+            .all(...requestedEmails)
+
+        const foundEmails = new Set(accounts.map(account => String(account.email).toLowerCase()))
+        const missingEmails = requestedEmails.filter(email => !foundEmails.has(email))
+        if (missingEmails.length) fail(`Account not found: ${missingEmails.join(', ')}.`)
+
+        if (tableExists(db, 'account_jobs')) {
+            const accountIds = accounts.map(account => account.id)
+            const jobPlaceholders = accountIds.map(() => '?').join(', ')
+            const activeJobs = Number(
+                db
+                    .prepare(
+                        `SELECT COUNT(*) AS value
+                         FROM account_jobs
+                         WHERE account_id IN (${jobPlaceholders})
+                           AND status IN ('pending', 'queued', 'running')`
+                    )
+                    .get(...accountIds).value
+            )
+            if (activeJobs) {
+                fail(`Cannot delete account(s) while ${activeJobs} related queue job(s) are active.`)
+            }
+        }
+
+        const accountIds = accounts.map(account => account.id)
+        const deletePlaceholders = accountIds.map(() => '?').join(', ')
+        const rememberDeletedAccount = db.prepare(
+            `INSERT INTO deleted_accounts (email, deleted_at)
+             VALUES (?, CURRENT_TIMESTAMP)
+             ON CONFLICT(email) DO UPDATE SET deleted_at = excluded.deleted_at`
+        )
+        for (const account of accounts) rememberDeletedAccount.run(account.email)
+        const result = db.prepare(`DELETE FROM accounts WHERE id IN (${deletePlaceholders})`).run(...accountIds)
+
+        db.exec('COMMIT')
+        return {
+            dbPath,
+            deleted: Number(result.changes ?? 0),
+            emails: accounts.map(account => account.email)
+        }
+    } catch (error) {
+        try {
+            db.exec('ROLLBACK')
+        } catch {}
+        throw error
     } finally {
         db.close()
     }

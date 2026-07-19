@@ -30,7 +30,7 @@ for (const account of accounts) {
     if (!key || labelsByKey.has(key)) continue
     const label = `proxy-${String(labelsByKey.size + 1).padStart(3, '0')}`
     labelsByKey.set(key, label)
-    proxies.push({ label, ...account.proxy, accountCapacity: 6 })
+    proxies.push({ label, ...account.proxy, accountCapacity: 1 })
 }
 
 const result = importAccountBundle(projectRoot, {

@@ -243,7 +243,7 @@ export function ensureAccountsDatabase(dbPath) {
                 password TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 max_concurrency INTEGER NOT NULL DEFAULT 1,
-                account_capacity INTEGER NOT NULL DEFAULT 6,
+                account_capacity INTEGER NOT NULL DEFAULT 1,
                 identity_key TEXT,
                 egress_ip TEXT,
                 cooldown_seconds INTEGER NOT NULL DEFAULT 0,
@@ -268,6 +268,11 @@ export function ensureAccountsDatabase(dbPath) {
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS deleted_accounts (
+                email TEXT PRIMARY KEY COLLATE NOCASE,
+                deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_accounts_proxy_id ON accounts(proxy_id);
             CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
             CREATE INDEX IF NOT EXISTS idx_accounts_slot ON accounts(slot);
@@ -281,7 +286,7 @@ export function ensureAccountsDatabase(dbPath) {
                 .map(row => row.name)
         )
         if (!proxyColumns.has('account_capacity')) {
-            db.exec('ALTER TABLE proxies ADD COLUMN account_capacity INTEGER NOT NULL DEFAULT 6')
+            db.exec('ALTER TABLE proxies ADD COLUMN account_capacity INTEGER NOT NULL DEFAULT 1')
         }
         if (!proxyColumns.has('identity_key')) {
             db.exec('ALTER TABLE proxies ADD COLUMN identity_key TEXT')
