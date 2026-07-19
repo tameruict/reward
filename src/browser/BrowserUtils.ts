@@ -6,9 +6,57 @@ import type { MicrosoftRewardsBot } from '../index'
 
 export default class BrowserUtils {
     private bot: MicrosoftRewardsBot
+    private readonly suspendedAccountNotified = new Set<string>()
+    private readonly rewardsOrigin = new URL(REWARDS_BASE_URL).origin
+
+    private readonly suspendedAccountPatterns = [
+        /\b(?:your\s+)?microsoft\s+rewards\s+account\s+(?:has\s+been|is)\s+suspended\b/i,
+        /\bwe(?:'ve|\s+have)\s+suspended\s+(?:your\s+)?microsoft\s+rewards\s+account\b/i,
+        /\byou(?:'re|\s+are)\s+suspended\s+from\s+(?:the\s+)?microsoft\s+rewards(?:\s+program)?\b/i,
+        /\byour\s+access\s+to\s+(?:the\s+)?microsoft\s+rewards(?:\s+program)?\s+(?:has\s+been|is)\s+suspended\b/i,
+        /\byou\s+can\s+no\s+longer\s+participate\s+in\s+(?:the\s+)?microsoft\s+rewards(?:\s+program)?\b/i
+    ]
 
     constructor(bot: MicrosoftRewardsBot) {
         this.bot = bot
+    }
+
+    /**
+     * Detects the Rewards suspension page and emits a notification once per account.
+     * The page can still be hosted on rewards.bing.com, so URL-only checks are not enough.
+     */
+    async checkSuspendedAccount(page: Page, accountEmail?: string): Promise<boolean> {
+        if (page.isClosed()) return false
+
+        try {
+            if (new URL(page.url()).origin !== this.rewardsOrigin) return false
+        } catch {
+            return false
+        }
+
+        const [title, bodyText] = await Promise.all([
+            page.title().catch(() => ''),
+            page
+                .locator('body')
+                .innerText({ timeout: 1000 })
+                .catch(() => '')
+        ])
+        const pageText = `${title} ${bodyText}`.replace(/\s+/g, ' ').trim()
+        const hasSuspensionSignal = this.suspendedAccountPatterns.some(pattern => pattern.test(pageText))
+
+        if (!hasSuspensionSignal) return false
+
+        const email = accountEmail ?? this.bot.currentAccountEmail ?? 'unknown account'
+        if (!this.suspendedAccountNotified.has(email)) {
+            this.suspendedAccountNotified.add(email)
+            this.bot.logger.error(
+                this.bot.isMobile,
+                'ACCOUNT-UNUSABLE',
+                `Account cannot be used: ${email} | Microsoft Rewards account has been suspended`
+            )
+        }
+
+        return true
     }
 
     async tryDismissAllMessages(page: Page): Promise<void> {
@@ -96,7 +144,9 @@ export default class BrowserUtils {
 
             const newTab = pages[pages.length - 1]
             if (!newTab) {
-                throw this.bot.logger.error(this.bot.isMobile, 'GET-NEW-TAB', 'No tabs could be found!')
+                const error = new Error('No tabs could be found!')
+                this.bot.logger.error(this.bot.isMobile, 'GET-NEW-TAB', error.message)
+                throw error
             }
 
             return newTab

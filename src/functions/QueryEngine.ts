@@ -186,7 +186,7 @@ export class QueryCore {
                 data: `f.req=[[[${GOOGLE_TRENDS_RPC_ID},"[null, null, \\"${geoLocale.toUpperCase()}\\", 0, null, 48]"]]]`
             }
 
-            const response = await this.bot.http.request<string>(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request<string>(request)
             const trendsData = this.extractJsonFromResponse(response.data)
             if (!trendsData) {
                 this.bot.logger.debug(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'No trends data parsed from response')
@@ -235,7 +235,7 @@ export class QueryCore {
 
             const response = await this.bot.http.request<{
                 suggestionGroups?: { searchSuggestions?: { query: string }[] }[]
-            }>(request, this.bot.config.proxy.queryEngine)
+            }>(request)
             return response.data.suggestionGroups?.[0]?.searchSuggestions?.map((x: { query: string }) => x.query) ?? []
         } catch (error) {
             this.bot.logger.debug(
@@ -255,7 +255,7 @@ export class QueryCore {
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.http.request<unknown[]>(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request<unknown[]>(request)
             const related = response.data?.[1]
             return Array.isArray(related) ? related : []
         } catch (error) {
@@ -281,7 +281,7 @@ export class QueryCore {
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.http.request(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request(request)
             const articles = (response.data as WikipediaTopResponse).items?.[0]?.articles ?? []
 
             return articles.slice(0, 50).map(a => a.article.replace(/_/g, ' '))
@@ -304,7 +304,7 @@ export class QueryCore {
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.http.request(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request(request)
             const posts = (response.data as RedditListing).data?.children ?? []
 
             return posts.filter(p => !p.data.over_18).map(p => p.data.title)
@@ -326,7 +326,7 @@ export class QueryCore {
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.http.request<HackerNewsResponse>(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request<HackerNewsResponse>(request)
             const hits = response.data?.hits ?? []
 
             return hits.map(h => (h.title ?? '').replace(/^(?:Show|Ask)\s+HN:\s*/i, '').trim()).filter(Boolean)
@@ -349,10 +349,7 @@ export class QueryCore {
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.http.request<WikipediaRandomResponse>(
-                request,
-                this.bot.config.proxy.queryEngine
-            )
+            const response = await this.bot.http.request<WikipediaRandomResponse>(request)
             const pages = response.data?.query?.random ?? []
 
             return pages.map(p => p.title.trim()).filter(Boolean)
@@ -414,7 +411,7 @@ export class QueryCore {
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             }
 
-            const response = await this.bot.http.request<string>(request, this.bot.config.proxy.queryEngine)
+            const response = await this.bot.http.request<string>(request)
             const xml = typeof response.data === 'string' ? response.data : String(response.data ?? '')
             return this.parseRssTitles(xml)
         } catch (error) {

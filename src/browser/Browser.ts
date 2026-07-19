@@ -1,6 +1,7 @@
 import rebrowser, { BrowserContext } from 'patchright'
 import { newInjectedContext } from 'fingerprint-injector'
 import { BrowserFingerprintWithHeaders, FingerprintGenerator } from 'fingerprint-generator'
+import net from 'node:net'
 
 import type { MicrosoftRewardsBot } from '../index'
 import { loadSession, saveFingerprint } from '../util/SessionStore'
@@ -47,9 +48,18 @@ class Browser {
         const headless = this.bot.config.headless
 
         const hasProxy = Boolean(account.proxy.url)
+        if (!hasProxy || Number(account.proxy.port) <= 0) {
+            throw new Error(
+                `Refusing to launch browser for ${account.email}: a valid account proxy is required and direct traffic is disabled`
+            )
+        }
 
         let browser: rebrowser.Browser
         try {
+            if (hasProxy) {
+                await this.assertProxyReachable(account.proxy)
+            }
+
             const proxyConfig = account.proxy.url
                 ? {
                       server: this.formatProxyServer(account.proxy),
@@ -154,6 +164,9 @@ class Browser {
                 p.on('crash', () =>
                     this.bot.logger.error(this.bot.isMobile, 'BROWSER', `Renderer crashed | ${p.url()}`)
                 )
+                p.on('domcontentloaded', () => {
+                    void this.bot.browser.utils.checkSuspendedAccount(p, account.email)
+                })
             })
             context.on('close', () => this.bot.logger.warn(this.bot.isMobile, 'BROWSER', 'Browser context closed'))
 
@@ -178,13 +191,49 @@ class Browser {
     }
 
     private formatProxyServer(proxy: AccountProxy): string {
-        try {
-            const urlObj = new URL(proxy.url)
-            const protocol = urlObj.protocol.replace(':', '')
-            return `${protocol}://${urlObj.hostname}:${proxy.port}`
-        } catch {
-            return `${proxy.url}:${proxy.port}`
+        const { host, port, protocol } = this.parseProxyEndpoint(proxy)
+        return `${protocol}://${host}:${port}`
+    }
+
+    private parseProxyEndpoint(proxy: AccountProxy): { host: string; port: number; protocol: string } {
+        const rawUrl = proxy.url.trim()
+        const hasProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(rawUrl)
+        const parsed = new URL(hasProtocol ? rawUrl : `http://${rawUrl}`)
+        const host = parsed.hostname
+        const port = Number(proxy.port || parsed.port)
+        const protocol = hasProtocol ? parsed.protocol.replace(':', '') : 'http'
+
+        if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+            throw new Error('Invalid proxy configuration: a valid host and port are required')
         }
+
+        return { host, port, protocol }
+    }
+
+    private async assertProxyReachable(proxy: AccountProxy): Promise<void> {
+        const { host, port } = this.parseProxyEndpoint(proxy)
+
+        await new Promise<void>((resolve, reject) => {
+            const socket = net.createConnection({ host, port })
+            let settled = false
+
+            const finish = (error?: Error) => {
+                if (settled) return
+                settled = true
+                socket.destroy()
+                if (error) reject(error)
+                else resolve()
+            }
+
+            socket.setTimeout(8000, () =>
+                finish(new Error(`Proxy endpoint is unreachable: connection timed out after 8000ms`))
+            )
+            socket.once('connect', () => finish())
+            socket.once('error', error => {
+                const errorCode = (error as NodeJS.ErrnoException).code
+                finish(new Error(`Proxy endpoint is unreachable: ${errorCode || error.message}`))
+            })
+        })
     }
 
     async generateFingerprint(isMobile: boolean): Promise<BrowserFingerprintWithHeaders> {

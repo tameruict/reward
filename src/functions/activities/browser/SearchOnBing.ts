@@ -64,7 +64,7 @@ export class SearchOnBing extends Workers {
                 `Error in doSearchOnBing | offerId=${offerId} | message=${error instanceof Error ? error.message : String(error)}`
             )
         } finally {
-            await page.goto(URLs.rewards.earn).catch(() => {})
+            await page.goto(URLs.rewards.dashboard).catch(() => {})
         }
     }
 
@@ -214,7 +214,12 @@ export class SearchOnBing extends Workers {
 
         const selector = '#sb_form_q'
         const searchBox = page.locator(selector)
-        await searchBox.waitFor({ state: 'visible', timeout: 15000 })
+        try {
+            await searchBox.waitFor({ state: 'visible', timeout: 15000 })
+        } catch (error) {
+            if (this.bot.http.usesProxy) await this.bot.http.assertProxyReady(true)
+            throw error
+        }
 
         await this.bot.utils.wait(500)
         await this.bot.browser.utils.ghostClick(page, selector, { clickCount: 3 })

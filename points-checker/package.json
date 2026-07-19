@@ -1,0 +1,15 @@
+{
+  "name": "microsoft-rewards-points-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local dashboard that checks Microsoft Rewards balances without running earning tasks",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "check": "node --env-file-if-exists=.env worker/checkAccount.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

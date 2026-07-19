@@ -10,6 +10,8 @@ import { PasswordlessLogin } from './methods/PasswordlessLogin'
 import { TotpLogin } from './methods/Totp2FALogin'
 import { CodeLogin } from './methods/GetACodeLogin'
 import { RecoveryLogin } from './methods/RecoveryEmailLogin'
+import { FuncaptchaLogin } from './methods/FuncaptchaLogin'
+import { RewardsAuthenticationRequiredError } from '../BrowserFunc'
 
 import type { Account } from '../../interface/Account'
 
@@ -24,12 +26,14 @@ type LoginState =
     | 'LOGGED_IN'
     | 'RECOVERY_EMAIL_INPUT'
     | 'ACCOUNT_LOCKED'
+    | 'ACCOUNT_SUSPENDED'
     | 'ERROR_ALERT'
     | '2FA_TOTP'
     | 'LOGIN_PASSWORDLESS'
     | 'GET_A_CODE'
     | 'GET_A_CODE_2'
     | 'OTP_CODE_ENTRY'
+    | 'CAPTCHA'
     | 'UNKNOWN'
     | 'CHROMEWEBDATA_ERROR'
 
@@ -39,6 +43,7 @@ export class Login {
     totp2FALogin: TotpLogin
     codeLogin: CodeLogin
     recoveryLogin: RecoveryLogin
+    funcaptchaLogin: FuncaptchaLogin
 
     private readonly capturedUnknownUrls = new Set<string>()
 
@@ -74,6 +79,7 @@ export class Login {
         this.totp2FALogin = new TotpLogin(this.bot)
         this.codeLogin = new CodeLogin(this.bot)
         this.recoveryLogin = new RecoveryLogin(this.bot)
+        this.funcaptchaLogin = new FuncaptchaLogin(this.bot)
     }
 
     async login(page: Page, account: Account) {
@@ -89,66 +95,7 @@ export class Login {
             await this.bot.utils.wait(2000)
             await this.bot.browser.utils.reloadBadPage(page)
             await this.bot.browser.utils.disableFido(page)
-
-            const maxIterations = 25
-            let iteration = 0
-            let previousState: LoginState = 'UNKNOWN'
-            let sameStateCount = 0
-
-            while (iteration < maxIterations) {
-                if (page.isClosed()) throw new Error('Page closed unexpectedly')
-
-                iteration++
-                this.bot.logger.debug(this.bot.isMobile, 'LOGIN', `State check iteration ${iteration}/${maxIterations}`)
-
-                const state = await this.detectCurrentState(page, account)
-                this.bot.logger.debug(this.bot.isMobile, 'LOGIN', `Current state: ${state}`)
-
-                if (state !== previousState && previousState !== 'UNKNOWN') {
-                    this.bot.logger.info(this.bot.isMobile, 'LOGIN', `State transition: ${previousState} → ${state}`)
-                }
-
-                if (state === previousState && state !== 'LOGGED_IN' && state !== 'UNKNOWN') {
-                    sameStateCount++
-                    this.bot.logger.debug(
-                        this.bot.isMobile,
-                        'LOGIN',
-                        `Same state count: ${sameStateCount}/4 for state "${state}"`
-                    )
-                    if (sameStateCount >= 4) {
-                        this.bot.logger.warn(
-                            this.bot.isMobile,
-                            'LOGIN',
-                            `Stuck in state "${state}" for 4 loops, refreshing page`
-                        )
-                        await page.reload({ waitUntil: 'domcontentloaded' })
-                        await this.bot.utils.wait(3000)
-                        sameStateCount = 0
-                        previousState = 'UNKNOWN'
-                        continue
-                    }
-                } else {
-                    sameStateCount = 0
-                }
-                previousState = state
-
-                if (state === 'LOGGED_IN') {
-                    this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Successfully logged in')
-                    break
-                }
-
-                const shouldContinue = await this.handleState(state, page, account)
-                if (!shouldContinue) {
-                    throw new Error(`Login failed or aborted at state: ${state}`)
-                }
-
-                await this.bot.utils.wait(1000)
-            }
-
-            if (iteration >= maxIterations) {
-                throw new Error('Login timeout: exceeded maximum iterations')
-            }
-
+            await this.runLoginStateMachine(page, account, 'initial login')
             await this.finalizeLogin(page, account)
         } catch (error) {
             this.bot.logger.error(
@@ -171,14 +118,28 @@ export class Login {
             return 'CHROMEWEBDATA_ERROR'
         }
 
+        if (await this.bot.browser.utils.checkSuspendedAccount(page, account?.email)) {
+            this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', 'Rewards suspension page detected')
+            return 'ACCOUNT_SUSPENDED'
+        }
+
         const isLocked = await this.checkSelector(page, this.selectors.accountLocked)
         if (isLocked) {
             this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', 'Account locked selector found')
             return 'ACCOUNT_LOCKED'
         }
 
-        if (url.hostname === 'rewards.bing.com' || url.hostname === 'account.microsoft.com') {
-            this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', 'On rewards/account page, assuming logged in')
+        if (await this.funcaptchaLogin.isPresent(page)) {
+            this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', 'Microsoft FunCaptcha challenge detected')
+            return 'CAPTCHA'
+        }
+
+        if (url.hostname === 'rewards.bing.com') {
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'DETECT-STATE',
+                'Rewards host reached; dashboard validation pending'
+            )
             return 'LOGGED_IN'
         }
 
@@ -247,7 +208,9 @@ export class Login {
         }
 
         const priorities: LoginState[] = [
+            'ACCOUNT_SUSPENDED',
             'ACCOUNT_LOCKED',
+            'CAPTCHA',
             'PASSKEY_VIDEO',
             'PASSKEY_ERROR',
             'KMSI_PROMPT',
@@ -306,6 +269,11 @@ export class Login {
                 throw new Error(msg)
             }
 
+            case 'ACCOUNT_SUSPENDED':
+                throw new Error(
+                    `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`
+                )
+
             case 'ERROR_ALERT': {
                 const alertEl = page.locator(this.selectors.errorAlert)
                 const errorMsg = await alertEl.innerText().catch(() => 'Unknown Error')
@@ -315,6 +283,12 @@ export class Login {
 
             case 'LOGGED_IN':
                 return true
+
+            case 'CAPTCHA': {
+                await this.funcaptchaLogin.solve(page)
+                await this.waitForIdle(page, 'after FunCaptcha verification')
+                return true
+            }
 
             case 'EMAIL_INPUT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Entering email')
@@ -403,29 +377,40 @@ export class Login {
 
             case 'CHROMEWEBDATA_ERROR': {
                 this.bot.logger.warn(this.bot.isMobile, 'LOGIN', 'chromewebdata error detected, attempting recovery')
-                try {
-                    this.bot.logger.info(this.bot.isMobile, 'LOGIN', `Navigating to ${REWARDS_BASE_URL}`)
-                    await page
-                        .goto(REWARDS_BASE_URL, {
+                const destinations = [REWARDS_BASE_URL, URLs.auth.loginLive]
+                const failures: string[] = []
+
+                for (const destination of destinations) {
+                    this.bot.logger.info(this.bot.isMobile, 'LOGIN', `Navigating to ${destination}`)
+                    try {
+                        const response = await page.goto(destination, {
                             waitUntil: 'domcontentloaded',
-                            timeout: 10000
+                            timeout: 15000
                         })
-                        .catch(() => {})
-                    await this.bot.utils.wait(3000)
-                    this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Recovery navigation successful')
-                    return true
-                } catch {
-                    this.bot.logger.warn(this.bot.isMobile, 'LOGIN', 'Fallback to login.live.com')
-                    await page
-                        .goto(URLs.auth.loginLive, {
-                            waitUntil: 'domcontentloaded',
-                            timeout: 10000
-                        })
-                        .catch(() => {})
-                    await this.bot.utils.wait(3000)
-                    this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Fallback navigation successful')
-                    return true
+                        const currentUrl = new URL(page.url())
+
+                        if (currentUrl.hostname === 'chromewebdata' || !response) {
+                            failures.push(`${new URL(destination).hostname}: browser error page`)
+                            continue
+                        }
+
+                        this.bot.logger.info(
+                            this.bot.isMobile,
+                            'LOGIN',
+                            `Recovery navigation reached ${currentUrl.hostname} (HTTP ${response.status()})`
+                        )
+                        return true
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error)
+                        const networkError = message.match(/net::ERR_[A-Z_]+/)?.[0] ?? 'navigation failed'
+                        failures.push(`${new URL(destination).hostname}: ${networkError}`)
+                        this.bot.logger.warn(this.bot.isMobile, 'LOGIN', `Recovery navigation failed: ${networkError}`)
+                    }
                 }
+
+                throw new Error(
+                    `Unable to recover from the Chromium network error page. Check or replace the configured proxy. ${failures.join('; ')}`
+                )
             }
 
             case '2FA_TOTP': {
@@ -517,12 +502,11 @@ export class Login {
 
         await page.goto(REWARDS_BASE_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
 
-        const loginRewardsSuccess = new URL(page.url()).hostname === 'rewards.bing.com'
-        if (loginRewardsSuccess) {
-            this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Logged into Microsoft Rewards successfully')
-        } else {
-            this.bot.logger.warn(this.bot.isMobile, 'LOGIN', 'Could not verify Rewards Dashboard, assuming login valid')
+        if (await this.bot.browser.utils.checkSuspendedAccount(page, account.email)) {
+            throw new Error(`Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`)
         }
+
+        this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Rewards landing reached; dashboard verification pending')
 
         // Dismiss at rewards dashboard
         await this.bot.browser.utils.tryDismissAllMessages(page).catch(() => {})
@@ -531,7 +515,9 @@ export class Login {
         await this.verifyBingSession(page, account)
 
         this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Acquiring rewards context')
-        await this.getRewardsSession(page)
+        await this.getRewardsSession(page, account)
+
+        this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Logged into Microsoft Rewards successfully')
 
         const context = page.context()
         const storageState = await context.storageState()
@@ -559,15 +545,6 @@ export class Login {
 
                 this.bot.logger.debug(this.bot.isMobile, 'LOGIN-BING', `Verification loop ${i + 1}/${loopMax}`)
 
-                const state = await this.detectCurrentState(page)
-                if (state === 'PASSKEY_ERROR') {
-                    this.bot.logger.info(this.bot.isMobile, 'LOGIN-BING', 'Dismissing Passkey error state')
-                    await this.bot.browser.utils.ghostClick(page, this.selectors.secondaryButton)
-                }
-
-                // Handle stats in case of password etc
-                await this.handleState(state, page, account)
-
                 const u = new URL(page.url())
                 const atBingHome = u.hostname === 'www.bing.com' && u.pathname === '/'
                 this.bot.logger.debug(
@@ -576,6 +553,10 @@ export class Login {
                     `At Bing home: ${atBingHome} (${u.hostname}${u.pathname})`
                 )
 
+                // Bing home is a valid post-authentication destination, but it
+                // does not match a Microsoft login-form state. Verify it before
+                // passing the page to the generic state handler so it is not
+                // reported as an "Unknown state" warning.
                 if (atBingHome) {
                     await this.bot.browser.utils.tryDismissAllMessages(page).catch(() => {})
 
@@ -592,6 +573,15 @@ export class Login {
                     }
                 }
 
+                const state = await this.detectCurrentState(page)
+                if (state === 'PASSKEY_ERROR') {
+                    this.bot.logger.info(this.bot.isMobile, 'LOGIN-BING', 'Dismissing Passkey error state')
+                    await this.bot.browser.utils.ghostClick(page, this.selectors.secondaryButton)
+                }
+
+                // Handle stats in case of password etc
+                await this.handleState(state, page, account)
+
                 await this.bot.utils.wait(1000)
             }
 
@@ -605,11 +595,40 @@ export class Login {
         }
     }
 
-    private async getRewardsSession(page: Page) {
+    private async getRewardsSession(page: Page, account: Account) {
         this.bot.logger.info(this.bot.isMobile, 'GET-REWARD-SESSION', 'Bootstrapping rewards context')
 
         try {
-            await this.bot.browser.func.bootstrap(page)
+            let authRecoveryAttempted = false
+
+            while (true) {
+                try {
+                    await this.bot.browser.func.bootstrap(page)
+                    break
+                } catch (error) {
+                    if (!(error instanceof RewardsAuthenticationRequiredError)) throw error
+
+                    if (authRecoveryAttempted) {
+                        throw new Error(`Rewards authentication loop detected after recovery (${error.destination})`, {
+                            cause: error
+                        })
+                    }
+
+                    authRecoveryAttempted = true
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'GET-REWARD-SESSION',
+                        `Rewards authentication required at ${error.destination}; resuming Microsoft login flow once`
+                    )
+                    await this.runLoginStateMachine(page, account, 'Rewards OAuth recovery')
+                }
+            }
+
+            if (await this.bot.browser.utils.checkSuspendedAccount(page, account.email)) {
+                throw new Error(
+                    `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`
+                )
+            }
 
             const actionsCount = Object.keys(this.bot.nextActions).length
             const snapshot = this.bot.reactSnapshot
@@ -628,7 +647,7 @@ export class Login {
                 this.bot.logger.warn(
                     this.bot.isMobile,
                     'GET-REWARD-SESSION',
-                    'Page snapshot empty - the /earn page may not have rendered the RSC payload'
+                    'Offer snapshot empty - the optional /earn request may not have returned the RSC payload'
                 )
             }
 
@@ -638,11 +657,84 @@ export class Login {
                 `Context ready | actions=${actionsCount} | reportable=${reportableCount} | available=${availablePoints}`
             )
         } catch (error) {
-            throw this.bot.logger.error(
+            this.bot.logger.error(
                 this.bot.isMobile,
                 'GET-REWARD-SESSION',
                 `Failed to acquire rewards context: ${error instanceof Error ? error.message : String(error)}`
             )
+            throw error
+        }
+    }
+
+    private async runLoginStateMachine(page: Page, account: Account, phase: string): Promise<void> {
+        const maxIterations = 25
+        let iteration = 0
+        let previousState: LoginState = 'UNKNOWN'
+        let sameStateCount = 0
+        let loggedIn = false
+
+        while (iteration < maxIterations) {
+            if (page.isClosed()) throw new Error(`Page closed unexpectedly during ${phase}`)
+
+            iteration++
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'LOGIN',
+                `State check iteration ${iteration}/${maxIterations} | phase=${phase}`
+            )
+
+            const state = await this.detectCurrentState(page, account)
+            this.bot.logger.debug(this.bot.isMobile, 'LOGIN', `Current state: ${state}`)
+
+            if (state !== previousState && previousState !== 'UNKNOWN') {
+                this.bot.logger.info(this.bot.isMobile, 'LOGIN', `State transition: ${previousState} → ${state}`)
+            }
+
+            if (state === previousState && state !== 'LOGGED_IN' && state !== 'UNKNOWN') {
+                sameStateCount++
+                this.bot.logger.debug(
+                    this.bot.isMobile,
+                    'LOGIN',
+                    `Same state count: ${sameStateCount}/4 for state "${state}"`
+                )
+                if (sameStateCount >= 4) {
+                    if (state === 'CHROMEWEBDATA_ERROR') {
+                        throw new Error(
+                            `Chromium remained on its network error page during ${phase}. Check or replace the configured proxy.`
+                        )
+                    }
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'LOGIN',
+                        `Stuck in state "${state}" for 4 loops during ${phase}, refreshing page`
+                    )
+                    await page.reload({ waitUntil: 'domcontentloaded' })
+                    await this.bot.utils.wait(3000)
+                    sameStateCount = 0
+                    previousState = 'UNKNOWN'
+                    continue
+                }
+            } else {
+                sameStateCount = 0
+            }
+            previousState = state
+
+            if (state === 'LOGGED_IN') {
+                this.bot.logger.info(this.bot.isMobile, 'LOGIN', `Authentication flow reached Rewards | phase=${phase}`)
+                loggedIn = true
+                break
+            }
+
+            const shouldContinue = await this.handleState(state, page, account)
+            if (!shouldContinue) {
+                throw new Error(`Login failed or aborted at state: ${state} | phase=${phase}`)
+            }
+
+            await this.bot.utils.wait(1000)
+        }
+
+        if (!loggedIn) {
+            throw new Error(`Login timeout: exceeded maximum iterations during ${phase}`)
         }
     }
 

@@ -56,21 +56,137 @@ Or, download the latest release ZIP and extract it.
 
 ## Account Setup
 
-- Copy and rename [`env.example`](env.example) to `.env` and add your account credentials:
+Accounts and proxies are stored in the local SQLite database at `data/accounts.db`. The `.env` file is now only for system settings such as `ACCOUNTS_DB_PATH`; account credentials do not need to live there.
 
-```env
-ACCOUNT_1_EMAIL=email@example.com
-ACCOUNT_1_PASSWORD=your_password
+For a new setup, generate one database encryption key and keep it in `.env`:
+
+```bash
+npm run accounts -- keygen
 ```
 
-> [!NOTE]
-> Add one `ACCOUNT_N_*` block per account, numbered from 1 with no gaps - the script stops at the first missing `ACCOUNT_N_EMAIL`. Optional per-account fields cover recovery email, locale (`ACCOUNT_N_GEO_LOCALE` defaults to `auto`, the locale of your Microsoft profile), language, proxy, and fingerprint persistence - see [`env.example`](env.example) for all of them.
+```env
+ACCOUNTS_DB_KEY=paste-the-generated-key-here
+```
 
-> [!TIP]
-> For 2FA accounts, set `ACCOUNT_N_TOTP_SECRET` and the script will generate and enter the 6-digit code automatically. To get the secret: in your Microsoft Security settings open 'Manage how you sign in', add an Authenticator app, and when the QR code appears choose 'enter code manually' - use that code as the value in your `.env`.
+Keep this key backed up; encrypted credentials cannot be recovered without it. For normal use, create `accounts.local.csv` from `accounts.example.csv`. Each row is one account, with no `ACCOUNT_1`, `ACCOUNT_2`, slot, or proxy label required:
 
-> [!WARNING]
-> You must rebuild your script after making any changes to the `.env`.
+```bash
+npm run accounts:import -- ./accounts.local.csv
+npm run accounts -- stats
+npm run accounts -- list
+```
+
+Rows containing the same proxy URL, port, and username are automatically grouped under one proxy record. The importer also accepts `accounts.txt` blocks with plain `EMAIL=...`, `PASSWORD=...`, and `PROXY_*=...` fields separated by blank lines, plus the normalized JSON format for advanced use.
+
+Proxy identity is based on protocol, host, port, and username. Changing `PROXY_HTTP`, password, status, or egress IP updates the existing proxy instead of creating another record. To reconcile duplicate rows created by an older version:
+
+```bash
+npm run accounts -- cleanup-proxies
+```
+
+Cleanup transfers accounts and stored job references to one surviving proxy inside a transaction before deleting duplicate rows. It refuses and rolls back a merge that would exceed the six-account capacity.
+
+Files named `accounts*.csv`, `accounts*.txt`, and `accounts*.json` are ignored by Git, except for the safe example files. Re-running import updates matching emails instead of creating duplicates, and import fails if more than six enabled accounts are assigned to one proxy. Queue-time parallelism for each proxy route is controlled separately by `QUEUE_PROXY_CONCURRENCY`.
+
+### Local proxy-safe queue
+
+The default queue runs directly on Windows, macOS, or Linux without Docker, Redis, or another service. SQLite stores batches, jobs, attempts, results, and leases in `data/accounts.db`. Atomic database transactions prevent worker lanes and separate worker processes on the same machine from claiming the same proxy lock simultaneously.
+
+Add these settings to `.env`:
+
+```env
+QUEUE_BACKEND=sqlite
+WORKER_CONCURRENCY=3
+QUEUE_PROXY_CONCURRENCY=3
+PROXY_LEASE_TTL_MS=120000
+QUEUE_POLL_INTERVAL_MS=1000
+JOB_MAX_ATTEMPTS=3
+JOB_RETRY_DELAY_MS=30000
+JOB_IDLE_TIMEOUT_MS=300000
+QUEUE_LOG_MODE=compact
+QUEUE_SKIP_SUCCEEDED_TODAY=true
+```
+
+Build once, then test the complete queue without launching a browser session:
+
+```bash
+npm run build
+npm run queue:dry-run
+npm run queue:status
+```
+
+`queue:dry-run` forces local SQLite mode and never launches a browser. `npm run queue:run` creates a transient local run, processes it to completion, removes its batch/job records, and exits. A stale local run left by an interrupted process is discarded on the next invocation after all associated processes and leases have stopped, so concurrency changes always apply to newly created jobs. Validated per-account success timestamps are retained separately for daily skipping. `queue:run` is also the recommended command for Windows Task Scheduler.
+
+For an always-running worker, use two terminals instead:
+
+```bash
+# Terminal 1
+npm run queue:worker
+
+# Terminal 2 whenever a new batch should start
+npm run queue:schedule
+```
+
+`WORKER_CONCURRENCY` is the number of account lanes. With `WORKER_CONCURRENCY=3`, the worker exposes lanes `T01`, `T02`, and `T03`. A lane runs exactly one account process at a time. `QUEUE_PROXY_CONCURRENCY` controls how many accounts may share one proxy/egress route concurrently; its default follows `WORKER_CONCURRENCY`, so the queue keeps all lanes busy while eligible jobs remain. Set it to `1` for strict one-account-at-a-time proxy serialization. The scheduler prefers unused proxy routes before opening a second slot on a busy route. Every running job renews its slot lease; losing ownership aborts its browser process. Expired leases from a crashed worker are recovered and retried up to `JOB_MAX_ATTEMPTS`.
+
+By default, a new batch skips accounts that already produced a validated successful `ACCOUNT-END` during the current local day. A completed run with `pointsGained=0` still counts as successful because there may be nothing left to earn. A flow error, missing `ACCOUNT-END`, non-zero process exit, lost lease, or idle timeout counts as failure and is retried up to `JOB_MAX_ATTEMPTS`. Set `QUEUE_SKIP_SUCCEEDED_TODAY=false` to deliberately run successful accounts again on the same day.
+
+Queue console lines keep their concurrency context on every line:
+
+```text
+[2026-07-18T07:00:00.000Z] [INFO   ] [T01] [proxy:proxy-a] [ac*****@example.com] [job:12345678] [ACCOUNT-START] Starting account
+[2026-07-18T07:00:00.120Z] [INFO   ] [T02] [proxy:proxy-b] [us***@example.com] [job:90abcdef] [ACCOUNT-START] Starting account
+```
+
+`QUEUE_LOG_MODE=compact` prints lifecycle, points, warning, and error events. Use `verbose` to print every child-process line or `silent` to keep only queue lifecycle lines. Full unmodified child output is always stored at `data/job-logs/<job-id>.log`; the matching `<job-id>.jsonl` contains structured records for APIs and dashboards. Account addresses are masked only in the shared console so concurrent output remains readable without exposing full addresses.
+
+Add `PROXY_EGRESS_IP` to CSV/TXT imports when multiple proxy endpoints share the same public exit IP. Those endpoints will then use the same `ip:<address>` lock. Without it, the lock falls back to the normalized proxy endpoint identity. Accounts without a proxy share the conservative `direct:default` lock.
+
+Queue environment settings:
+
+| Variable                 | Default  | Purpose                                                 |
+| ------------------------ | -------- | ------------------------------------------------------- |
+| `QUEUE_BACKEND`          | `sqlite` | `sqlite` for local use or `redis` for BullMQ            |
+| `WORKER_CONCURRENCY`     | `3`      | Account lanes; each lane runs one account process       |
+| `QUEUE_PROXY_CONCURRENCY` | same as lanes | Concurrent accounts allowed per proxy/egress route |
+| `PROXY_LEASE_TTL_MS`     | `120000` | Lease lifetime, renewed every third of the TTL          |
+| `QUEUE_POLL_INTERVAL_MS` | `1000`   | Local worker polling interval                           |
+| `JOB_MAX_ATTEMPTS`       | `3`      | Maximum attempts for a failed account job               |
+| `JOB_RETRY_DELAY_MS`     | `30000`  | Initial exponential retry delay                         |
+| `JOB_IDLE_TIMEOUT_MS`    | `300000` | Stop/retry a child after this long without output       |
+| `QUEUE_DRY_RUN`          | `false`  | Test queue and locks without launching the browser tool |
+| `QUEUE_EXIT_WHEN_IDLE`   | `false`  | Exit a local worker after all active jobs finish        |
+| `QUEUE_LOG_MODE`         | `compact` | Console detail: `compact`, `verbose`, or `silent`      |
+| `QUEUE_SKIP_SUCCEEDED_TODAY` | `true` | Skip accounts with a validated success today       |
+
+The queue starts one-account child processes, so its proxy leases remain the source of concurrency control regardless of the bot's `clusters` setting. SQLite mode supports multiple processes on one machine. Do not put `accounts.db` on a network share. Before distributing workers across multiple machines, move job/catalog state to PostgreSQL or another central database service.
+
+Redis remains optional. Set `QUEUE_BACKEND=redis` and `REDIS_URL=redis://host:6379` only when an external Redis server is available; BullMQ will then handle dispatch while retaining the same account job database.
+
+To enable or disable an account without editing the import file:
+
+```bash
+npm run accounts -- disable user@example.com
+npm run accounts -- enable user@example.com
+```
+
+If account values already exist as `ACCOUNT_N_*` entries in `.env`, migrate them once with:
+
+```bash
+npm run accounts:migrate
+```
+
+Database mode is now the default. Use `ACCOUNTS_DB_PATH=path/to/accounts.db` for a custom location. `ACCOUNTS_SOURCE=env` remains available only as a compatibility mode during migration.
+
+### Automatic Microsoft FunCaptcha solving
+
+Microsoft may show an Arkose Labs FunCaptcha during sign-in. The script can solve it through [OMOCaptcha](https://docs.omocaptcha.com/captchas/funcaptcha/image/) when an API key is configured in `.env`:
+
+```env
+OMOCAPTCHA_API_KEY=your-omocaptcha-api-key
+```
+
+The integration sends the original puzzle image and its question to OMOCaptcha, polls the result with exponential backoff, selects the returned image index, and continues the login flow. The optional `OMOCAPTCHA_MAX_WAIT_MS` setting changes the default 90-second task timeout; `OMOCAPTCHA_API_URL` can override the default `https://api.omocaptcha.com` endpoint. If no API key is configured, normal login behavior is unchanged until a FunCaptcha appears, at which point the log explains how to enable the solver.
 
 ## Config Setup
 
@@ -91,15 +207,18 @@ npm run build
 npm run start
 ```
 
+`npm run start` keeps the original account workflow and schedules it in proxy-safe lanes. Set `clusters` to `0` (the default) to create one worker for every distinct proxy route automatically. Accounts on the same proxy always stay in one worker and run sequentially; different proxies run in parallel. Set `clusters` to a positive number to cap the worker count. Every enabled account must have a valid proxy: loading, importing, and browser launch all fail closed instead of falling back to direct traffic. Mobile and desktop fingerprints are persisted by default so saved sessions keep a stable browser identity.
+
 ## Docker
 
 - Copy the sample [`compose.yaml`](compose.yaml)
-- Copy and rename [`env.example`](env.example) to `.env` and add your account credentials:
+- Put only the account database key in `.env`:
 
 ```env
-ACCOUNT_1_EMAIL=email@example.com
-ACCOUNT_1_PASSWORD=your_password
+ACCOUNTS_DB_KEY=your-generated-database-key
 ```
+
+- Import `accounts.local.csv` before starting the container. The mounted `./data` directory contains `accounts.db`.
 
 - Review `compose.yaml` to adjust scheduling, timezone, and config options.
 
@@ -182,7 +301,7 @@ Edit `config.json` to customize behavior, or set `CONFIG_*` environment variable
 | --------------------------- | ------- | ------------ | ------------------------------------------------------------------ | ------------------------------------- |
 | `sessionPath`               | string  | `"sessions"` | Directory to store browser sessions                                |                                       |
 | `headless`                  | boolean | `false`      | Run browser invisibly                                              | Always `true` in Docker               |
-| `clusters`                  | number  | `1`          | Number of concurrent account clusters                              | `CONFIG_CLUSTERS`                     |
+| `clusters`                  | number  | `0`          | Max proxy-safe workers; `0` selects one worker per proxy route      | `CONFIG_CLUSTERS`                     |
 | `errorDiagnostics`          | boolean | `false`      | Save error and unknown-login page diagnostics under `diagnostics/` | `CONFIG_ERROR_DIAGNOSTICS`            |
 | `ensureStreakProtection`    | boolean | `true`       | Ensure streak protection is enabled                                | `CONFIG_ENSURE_STREAK_PROTECTION`     |
 | `autoClaimPunchcardRewards` | boolean | `false`      | Auto-claim completed punchcard rewards                             | `CONFIG_AUTO_CLAIM_PUNCHCARD_REWARDS` |
@@ -308,9 +427,13 @@ Opt-in features that may change. Disabled by default.
 
 ### Proxy
 
+An account with a non-empty `PROXY_URL` is proxy-locked. Its browser traffic and all account-scoped HTTP requests, including query sources and user-agent metadata lookups, use that proxy. The runner never falls back to the machine's direct connection. `PROXY_HTTP` is retained for import compatibility, but it cannot disable this enforcement when `PROXY_URL` is present.
+
+Before an account starts, the runner performs a bounded HTTP health check through the configured proxy. A failed proxy opens a 60-second circuit for that endpoint so other accounts assigned to the same dead proxy fail immediately instead of repeating long timeouts. Run `npm run proxies:check` to validate every configured proxy before a batch.
+
 | Setting             | Type    | Default | Description                 | Docker environment variable |
 | ------------------- | ------- | ------- | --------------------------- | --------------------------- |
-| `proxy.queryEngine` | boolean | `true`  | Proxy query engine requests | `CONFIG_PROXY_QUERY_ENGINE` |
+| `proxy.queryEngine` | boolean | `true`  | Legacy compatibility setting; account proxy-locking always takes precedence | `CONFIG_PROXY_QUERY_ENGINE` |
 
 ### Webhooks
 

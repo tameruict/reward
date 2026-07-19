@@ -16,6 +16,72 @@ import type { AppDashboardData } from '../interface/AppDashBoardData'
 
 // Bing-hosted image used to seed the daily visual search. /images/kblob fetches it (Can be changed)
 const VISUAL_SEARCH_IMAGE_URL = 'https://th.bing.com/th?id=OMR.VisualSearch.VNext.BackgroundImage.png&pid=Rewards'
+const BROWSER_SHUTDOWN_TIMEOUT_MS = 15000
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
+                timer.unref?.()
+            })
+        ])
+    } finally {
+        if (timer) clearTimeout(timer)
+    }
+}
+
+function sanitizeUrlForLog(value: string): string {
+    try {
+        const url = new URL(value)
+        return url.origin === 'null' ? `${url.protocol}${url.pathname}` : `${url.hostname}${url.pathname}`
+    } catch {
+        return value.split(/[?#]/, 1)[0] ?? 'unknown'
+    }
+}
+
+function isMicrosoftAuthHostname(hostname: string): boolean {
+    return ['login.live.com', 'login.microsoftonline.com', 'account.live.com'].includes(hostname)
+}
+
+export class RewardsAuthenticationRequiredError extends Error {
+    readonly destination: string
+
+    constructor(finalUrl: string) {
+        const destination = sanitizeUrlForLog(finalUrl)
+        super(`Rewards authentication is required after redirect to ${destination}`)
+        this.name = 'RewardsAuthenticationRequiredError'
+        this.destination = destination
+    }
+}
+
+class RewardsUnexpectedRedirectError extends Error {
+    constructor(finalUrl: string) {
+        super(`Rewards /dashboard redirected unexpectedly to ${sanitizeUrlForLog(finalUrl)}`)
+        this.name = 'RewardsUnexpectedRedirectError'
+    }
+}
+
+class RewardsHttpStatusError extends Error {
+    constructor(readonly status: number) {
+        super(`Rewards /dashboard returned HTTP ${status}`)
+        this.name = 'RewardsHttpStatusError'
+    }
+}
+
+function isRetryableDashboardError(error: unknown): boolean {
+    if (error instanceof RewardsAuthenticationRequiredError || error instanceof RewardsUnexpectedRedirectError) {
+        return false
+    }
+
+    if (error instanceof RewardsHttpStatusError) {
+        return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500
+    }
+
+    return true
+}
 
 export default class BrowserFunc {
     private bot: MicrosoftRewardsBot
@@ -31,6 +97,7 @@ export default class BrowserFunc {
             const request: HttpRequestConfig = {
                 url: URLs.rewards.userInfoApi,
                 method: 'GET',
+                timeout: Math.max(20000, this.bot.utils.stringToNumber(this.bot.config.globalTimeout)),
                 headers: {
                     ...(this.bot.fingerprint?.headers ?? {}),
                     Cookie: this.buildCookieHeader(cookies ?? this.bot.cookies.mobile, [
@@ -50,11 +117,12 @@ export default class BrowserFunc {
             }
             throw new Error('Dashboard data missing from API response')
         } catch (error) {
-            throw this.bot.logger.error(
+            this.bot.logger.error(
                 this.bot.isMobile,
                 'GET-DASHBOARD-DATA',
                 `Failed to get dashboard data: ${error instanceof Error ? error.message : String(error)}`
             )
+            throw error
         }
     }
 
@@ -231,40 +299,40 @@ export default class BrowserFunc {
 
     async bootstrap(page: Page): Promise<void> {
         try {
-            // /earn is the offers page
-            await page.goto(URLs.rewards.earn, { waitUntil: 'domcontentloaded' })
-            const earnHtml = await page.content()
+            const timeoutMs = Math.max(this.bot.utils.stringToNumber(this.bot.config.globalTimeout), 60000)
+            const dashboardHtml = await this.loadRewardsDashboardPage(page, timeoutMs)
 
             this.bot.nextRouterStateTree = this.bot.browser.react.routerStateTree('earn')
 
-            //offers (valid hashes), streaks, account state
-            this.bot.reactSnapshot = this.bot.browser.react.snapshotPage(earnHtml)
-
-            // pull /dashboard HTML to capture chunks that /earn doesn't show
-            let dashboardHtml = ''
+            // /earn contains offer hashes and RSC action metadata, but it is not required
+            // for validating the authenticated browser session.
+            let earnHtml = ''
             try {
-                const res = await page.request.get(URLs.rewards.dashboard)
+                const res = await page.request.get(URLs.rewards.earn, { timeout: Math.min(timeoutMs, 30000) })
                 if (res.ok()) {
-                    dashboardHtml = await res.text()
+                    earnHtml = await res.text()
                 } else {
                     this.bot.logger.warn(
                         this.bot.isMobile,
                         'BOOTSTRAP',
-                        `Failed to fetch /dashboard HTML | status=${res.status()} - action discovery may be incomplete`
+                        `Failed to fetch optional /earn HTML | status=${res.status()} - offer/action discovery may be incomplete`
                     )
                 }
             } catch (error) {
                 this.bot.logger.warn(
                     this.bot.isMobile,
                     'BOOTSTRAP',
-                    `Failed to fetch /dashboard HTML | error=${error instanceof Error ? error.message : String(error)} - action discovery may be incomplete`
+                    `Failed to fetch optional /earn HTML | error=${error instanceof Error ? error.message : String(error)} - continuing with /dashboard context`
                 )
             }
 
-            // discovered from chunks referenced by either page
-            this.bot.nextActions = await this.resolveActionIds(page, [earnHtml, dashboardHtml])
+            const snapshotHtml = earnHtml || dashboardHtml
+            this.bot.reactSnapshot = this.bot.browser.react.snapshotPage(snapshotHtml)
 
-            const dashboardRendered = /<section\b[^>]*\bid=["']dailyset["']/i.test(dashboardHtml || earnHtml)
+            // Discover chunks from both pages when the optional /earn request succeeds.
+            this.bot.nextActions = await this.resolveActionIds(page, [dashboardHtml, earnHtml])
+
+            const dashboardRendered = /<section\b[^>]*\bid=["']dailyset["']/i.test(dashboardHtml)
             if (!dashboardRendered) {
                 throw new Error(
                     'Rewards dashboard did not render (no section#dailyset) - likely a login/redirect issue, aborting'
@@ -296,9 +364,14 @@ export default class BrowserFunc {
             this.bot.logger.info(
                 this.bot.isMobile,
                 'BUILD',
-                `Rewards build | id=${this.bot.browser.react.buildId(earnHtml) ?? 'unknown'}`
+                `Rewards build | id=${this.bot.browser.react.buildId(snapshotHtml) ?? 'unknown'}`
             )
         } catch (error) {
+            // The login flow owns this recoverable redirect and will resume the
+            // Microsoft OAuth state machine once. Do not emit a false ERROR
+            // before that recovery has had a chance to succeed.
+            if (error instanceof RewardsAuthenticationRequiredError) throw error
+
             this.bot.logger.error(
                 this.bot.isMobile,
                 'BOOTSTRAP',
@@ -306,6 +379,90 @@ export default class BrowserFunc {
             )
             throw error
         }
+    }
+
+    private async loadRewardsDashboardPage(page: Page, timeoutMs: number): Promise<string> {
+        const maxAttempts = 3
+        const domTimeoutMs = Math.min(timeoutMs, 20000)
+        const expectedHostname = new URL(URLs.rewards.dashboard).hostname
+        let lastError: unknown
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                const response = await page.goto(URLs.rewards.dashboard, { waitUntil: 'commit', timeout: timeoutMs })
+                const status = response?.status()
+
+                if (status !== undefined && status >= 400) {
+                    throw new RewardsHttpStatusError(status)
+                }
+
+                let domReady = true
+                try {
+                    await page.waitForLoadState('domcontentloaded', { timeout: domTimeoutMs })
+                } catch (error) {
+                    if (isBrowserClosedError(error)) throw error
+                    domReady = false
+                }
+
+                const finalUrl = page.url()
+                const finalHostname = new URL(finalUrl).hostname
+                if (finalHostname !== expectedHostname) {
+                    if (isMicrosoftAuthHostname(finalHostname)) {
+                        throw new RewardsAuthenticationRequiredError(finalUrl)
+                    }
+                    throw new RewardsUnexpectedRedirectError(finalUrl)
+                }
+
+                const html = await page.content()
+                if (!/<body\b/i.test(html) || html.length < 1000) {
+                    throw new Error(`Rewards /dashboard returned incomplete HTML (${html.length} bytes)`)
+                }
+
+                if (!domReady) {
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'BOOTSTRAP',
+                        `DOMContentLoaded was not observed within ${domTimeoutMs}ms; continuing with usable HTML | attempt=${attempt}/${maxAttempts}`
+                    )
+                }
+
+                return html
+            } catch (error) {
+                if (isBrowserClosedError(error)) throw error
+                lastError = error
+
+                const message = error instanceof Error ? error.message : String(error)
+                const finalUrl = page.isClosed() ? 'page-closed' : sanitizeUrlForLog(page.url())
+                const retryable = isRetryableDashboardError(error)
+
+                if (!retryable) {
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'BOOTSTRAP',
+                        `Rewards /dashboard navigation stopped | attempt=${attempt}/${maxAttempts} | url=${finalUrl} | error=${message}`
+                    )
+                    throw error
+                }
+
+                if (attempt < maxAttempts) {
+                    const retryDelayMs = attempt * 3000
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'BOOTSTRAP',
+                        `Rewards /dashboard navigation failed | attempt=${attempt}/${maxAttempts} | url=${finalUrl} | error=${message} | retryIn=${retryDelayMs}ms`
+                    )
+                    await page.evaluate(() => window.stop()).catch(() => {})
+                    await this.bot.utils.wait(retryDelayMs)
+                }
+            }
+        }
+
+        const message = lastError instanceof Error ? lastError.message : String(lastError)
+        const finalUrl = page.isClosed() ? 'page-closed' : sanitizeUrlForLog(page.url())
+        throw new Error(
+            `Rewards /dashboard could not be loaded after ${maxAttempts} attempts (transient failures; timeout=${timeoutMs}ms, finalUrl=${finalUrl}). Last error: ${message}`,
+            { cause: lastError }
+        )
     }
 
     private async resolveActionIds(page: Page, htmls: string[]): Promise<Record<string, string>> {
@@ -440,20 +597,31 @@ export default class BrowserFunc {
         return [...seen]
     }
 
-    async closeBrowser(browser: BrowserContext, email: string) {
+    async closeBrowser(browser: BrowserContext, email: string, persistSession = true) {
         const rootBrowser = browser.browser?.() || null
 
         try {
-            // Store state (cookies + localStorage) for next run
-            const storageState = await browser.storageState()
-            this.bot.logger.debug(
-                this.bot.isMobile,
-                'CLOSE-BROWSER',
-                `Saving session | cookies=${storageState.cookies.length} | origins=${storageState.origins.length}`
-            )
-            saveStorageState(this.bot.config.sessionPath, email, this.bot.isMobile, storageState)
-
-            await this.bot.utils.wait(2000)
+            if (persistSession) {
+                // Store state (cookies + localStorage) for next run only after authentication was validated.
+                const storageState = await withTimeout(
+                    browser.storageState(),
+                    BROWSER_SHUTDOWN_TIMEOUT_MS,
+                    'Browser session save'
+                )
+                this.bot.logger.debug(
+                    this.bot.isMobile,
+                    'CLOSE-BROWSER',
+                    `Saving session | cookies=${storageState.cookies.length} | origins=${storageState.origins.length}`
+                )
+                saveStorageState(this.bot.config.sessionPath, email, this.bot.isMobile, storageState)
+                await this.bot.utils.wait(2000)
+            } else {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'CLOSE-BROWSER',
+                    'Skipping session save because Rewards authentication was not validated'
+                )
+            }
         } catch (error) {
             if (isBrowserClosedError(error)) {
                 this.bot.logger.debug(
@@ -465,24 +633,41 @@ export default class BrowserFunc {
                 this.bot.logger.error(this.bot.isMobile, 'CLOSE-BROWSER', `Failed to save session: ${error}`)
             }
         } finally {
+            let shutdownError: unknown = null
             try {
-                await browser.close()
-
-                if (rootBrowser) {
-                    await rootBrowser.close().catch(() => {})
-                }
-
-                this.bot.logger.info(this.bot.isMobile, 'CLOSE-BROWSER', 'All browser resources closed.')
+                await withTimeout(browser.close(), BROWSER_SHUTDOWN_TIMEOUT_MS, 'Browser context close')
             } catch (error) {
                 if (isBrowserClosedError(error)) {
                     this.bot.logger.debug(this.bot.isMobile, 'CLOSE-BROWSER', 'Browser was already closed.')
                 } else {
+                    shutdownError = error
                     this.bot.logger.warn(
                         this.bot.isMobile,
                         'CLOSE-BROWSER',
-                        'Shutdown encountered an error, but process exiting.'
+                        `Context shutdown did not finish cleanly: ${error instanceof Error ? error.message : String(error)}`
                     )
                 }
+            }
+
+            if (rootBrowser) {
+                try {
+                    await withTimeout(rootBrowser.close(), BROWSER_SHUTDOWN_TIMEOUT_MS, 'Root browser close')
+                } catch (error) {
+                    if (!isBrowserClosedError(error)) {
+                        shutdownError ??= error
+                        this.bot.logger.warn(
+                            this.bot.isMobile,
+                            'CLOSE-BROWSER',
+                            `Root browser shutdown did not finish cleanly: ${error instanceof Error ? error.message : String(error)}`
+                        )
+                    }
+                }
+            }
+
+            if (shutdownError) {
+                this.bot.logger.warn(this.bot.isMobile, 'CLOSE-BROWSER', 'Shutdown deadline reached; process exiting.')
+            } else {
+                this.bot.logger.info(this.bot.isMobile, 'CLOSE-BROWSER', 'All browser resources closed.')
             }
         }
     }

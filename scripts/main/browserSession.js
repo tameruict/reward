@@ -7,7 +7,7 @@ import {
     parseArgs,
     validateEmail,
     loadConfig,
-    loadAccountsFromEnv,
+    loadAccounts,
     findAccountByEmail,
     buildProxyConfig,
     getSessionDbPath,
@@ -17,7 +17,7 @@ import {
     setupCleanupHandlers
 } from '../utils.js'
 
-const REWARDS_URL = 'https://rewards.bing.com'
+const REWARDS_URL = 'https://rewards.bing.com/'
 
 const BROWSER_ARGS = [
     '--mute-audio',
@@ -46,10 +46,11 @@ const { data: config } = loadConfig(projectRoot)
 
 const channel = 'chrome'
 
-const accounts = loadAccountsFromEnv(projectRoot)
+const accounts = loadAccounts(projectRoot)
 const account = findAccountByEmail(accounts, args.email)
 if (!account) {
-    log('WARN', `No ACCOUNT_N_* block found in .env for ${args.email} - opening without a proxy`)
+    log('ERROR', `No configured account found for ${args.email}; refusing to open a direct browser session`)
+    process.exit(1)
 }
 
 function platformsToTry() {
@@ -98,8 +99,8 @@ async function main() {
     const userAgent = fingerprint?.fingerprint?.navigator?.userAgent || fingerprint?.fingerprint?.userAgent || null
 
     const proxy = account ? buildProxyConfig(account) : null
-    if (account?.proxy?.url && (!proxy || !proxy.server)) {
-        log('ERROR', 'Account proxy is configured but invalid (needs proxy url + port)')
+    if (!proxy || !proxy.server) {
+        log('ERROR', 'A valid account proxy is required; direct browser sessions are disabled')
         process.exit(1)
     }
 

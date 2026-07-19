@@ -10,6 +10,7 @@ import type { MicrosoftRewardsBot } from '../../../index'
 
 const REFRESH_EVERY = 10
 const MAX_QUERY_ATTEMPTS = 5
+const MAX_MEASUREMENT_FAILURES = 3
 
 const POINTS_MAX_SEARCHES = 100
 const POINTS_STAGNANT_LIMIT = 10
@@ -84,6 +85,7 @@ export class Search extends Workers {
 
     private async runSearchSession(page: Page, isMobile: boolean, tracker: SearchTracker): Promise<SessionStats> {
         const stats: SessionStats = { totalGained: 0, performed: 0, stagnant: 0 }
+        let measurementFailures = 0
 
         try {
             const ready = await tracker.prepare()
@@ -120,7 +122,24 @@ export class Search extends Workers {
                 await this.bingSearch(page, query, isMobile)
                 stats.performed++
 
-                const gained = await tracker.measure()
+                let gained: number
+                try {
+                    gained = await tracker.measure()
+                    measurementFailures = 0
+                } catch (error) {
+                    measurementFailures++
+                    this.bot.logger.warn(
+                        isMobile,
+                        tracker.context,
+                        `Could not refresh search progress | failure=${measurementFailures}/${MAX_MEASUREMENT_FAILURES} | ${error instanceof Error ? error.message : String(error)}`
+                    )
+
+                    if (measurementFailures >= MAX_MEASUREMENT_FAILURES) throw error
+
+                    await this.bot.utils.wait(this.bot.utils.randomDelay(5000, 10000))
+                    continue
+                }
+
                 if (gained > 0) {
                     stats.stagnant = 0
                     stats.totalGained += gained
@@ -205,11 +224,18 @@ export class Search extends Workers {
 
                 return
             } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
                 this.bot.logger.warn(
                     isMobile,
                     'SEARCH-BING',
-                    `Search attempt ${attempt}/${MAX_QUERY_ATTEMPTS} failed | query="${query}" | ${error instanceof Error ? error.message : String(error)}`
+                    `Search attempt ${attempt}/${MAX_QUERY_ATTEMPTS} failed | query="${query}" | ${message}`
                 )
+
+                if (this.bot.http.usesProxy && (/locator\.waitFor/i.test(message) || /#sb_form_q/i.test(message))) {
+                    // If the proxy died after browser launch, stop the five-attempt
+                    // locator loop immediately instead of waiting on an empty page.
+                    await this.bot.http.assertProxyReady(true)
+                }
                 await this.bot.utils.wait(2000)
             }
         }

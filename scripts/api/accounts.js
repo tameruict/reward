@@ -1,3 +1,7 @@
+import { getDirname, getProjectRoot, loadAccounts as loadConfiguredAccounts } from '../utils.js'
+
+const projectRoot = getProjectRoot(getDirname(import.meta.url))
+
 function envStrFrom(sourceEnv, key) {
     const v = sourceEnv[key]
     if (v === undefined) return undefined
@@ -5,12 +9,7 @@ function envStrFrom(sourceEnv, key) {
     return t.length ? t : undefined
 }
 
-/**
- * Returns the configured accounts without exposing passwords, recovery
- * addresses, TOTP secrets, or proxy credentials. This API is intended for the
- * local dashboard, so account email addresses are returned in full.
- */
-export function loadAccounts(sourceEnv = process.env) {
+function loadAccountsFromEnvObject(sourceEnv) {
     const accounts = []
     const indexes = [
         ...new Set(
@@ -25,25 +24,100 @@ export function loadAccounts(sourceEnv = process.env) {
         const email = envStrFrom(sourceEnv, `ACCOUNT_${i}_EMAIL`)
         if (!email) continue
 
-        const proxyUrl = envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_URL`)
         accounts.push({
-            index: i,
+            slot: i,
             email,
-            emailKey: email, // internal history join key; removed before returning the response
+            password: envStrFrom(sourceEnv, `ACCOUNT_${i}_PASSWORD`) ?? '',
+            totpSecret: envStrFrom(sourceEnv, `ACCOUNT_${i}_TOTP_SECRET`),
+            recoveryEmail: envStrFrom(sourceEnv, `ACCOUNT_${i}_RECOVERY_EMAIL`) ?? '',
             geoLocale: envStrFrom(sourceEnv, `ACCOUNT_${i}_GEO_LOCALE`) ?? 'auto',
             langCode: envStrFrom(sourceEnv, `ACCOUNT_${i}_LANG_CODE`) ?? 'en',
-            hasRecoveryEmail: Boolean(envStrFrom(sourceEnv, `ACCOUNT_${i}_RECOVERY_EMAIL`)),
-            hasTotp: Boolean(envStrFrom(sourceEnv, `ACCOUNT_${i}_TOTP_SECRET`)),
+            proxy: {
+                proxyHttp: ['1', 'true', 'yes', 'on'].includes(
+                    (
+                        envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_HTTP`) ??
+                        envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_AXIOS`) ??
+                        'false'
+                    ).toLowerCase()
+                ),
+                url: envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_URL`) ?? '',
+                port: Number(envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PORT`) ?? 0),
+                username: envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_USERNAME`) ?? '',
+                password: envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PASSWORD`) ?? ''
+            },
+            saveFingerprint: {
+                mobile: ['1', 'true', 'yes', 'on'].includes(
+                    (envStrFrom(sourceEnv, `ACCOUNT_${i}_SAVE_FINGERPRINT_MOBILE`) ?? 'true').toLowerCase()
+                ),
+                desktop: ['1', 'true', 'yes', 'on'].includes(
+                    (envStrFrom(sourceEnv, `ACCOUNT_${i}_SAVE_FINGERPRINT_DESKTOP`) ?? 'true').toLowerCase()
+                )
+            }
+        })
+    }
+
+    return accounts
+}
+
+function loadConfiguredAccountList(sourceEnv) {
+    if (sourceEnv !== process.env) return loadAccountsFromEnvObject(sourceEnv)
+    return loadConfiguredAccounts(projectRoot)
+}
+
+function resolveAccountIndex(account, fallback) {
+    return Number.isSafeInteger(account.slot) && account.slot > 0 ? account.slot : fallback
+}
+
+function accountToEnv(account, targetIndex) {
+    const prefix = `ACCOUNT_${targetIndex}_`
+    const env = {
+        [`${prefix}EMAIL`]: account.email,
+        [`${prefix}PASSWORD`]: account.password,
+        [`${prefix}RECOVERY_EMAIL`]: account.recoveryEmail ?? '',
+        [`${prefix}GEO_LOCALE`]: account.geoLocale ?? 'auto',
+        [`${prefix}LANG_CODE`]: account.langCode ?? 'en',
+        [`${prefix}SAVE_FINGERPRINT_MOBILE`]: account.saveFingerprint?.mobile ? 'true' : 'false',
+        [`${prefix}SAVE_FINGERPRINT_DESKTOP`]: account.saveFingerprint?.desktop ? 'true' : 'false'
+    }
+
+    if (account.totpSecret) env[`${prefix}TOTP_SECRET`] = account.totpSecret
+    if (account.proxy?.url) {
+        env[`${prefix}PROXY_HTTP`] = account.proxy.proxyHttp ? 'true' : 'false'
+        env[`${prefix}PROXY_URL`] = account.proxy.url
+        env[`${prefix}PROXY_PORT`] = String(account.proxy.port ?? 0)
+        env[`${prefix}PROXY_USERNAME`] = account.proxy.username ?? ''
+        env[`${prefix}PROXY_PASSWORD`] = account.proxy.password ?? ''
+    }
+
+    return env
+}
+
+/**
+ * Returns the configured accounts without exposing passwords, recovery
+ * addresses, TOTP secrets, or proxy credentials. This API is intended for the
+ * local dashboard, so account email addresses are returned in full.
+ */
+export function loadAccounts(sourceEnv = process.env) {
+    return loadConfiguredAccountList(sourceEnv).map((account, position) => {
+        const proxyUrl = account.proxy?.url
+        const index = resolveAccountIndex(account, position + 1)
+        return {
+            index,
+            email: account.email,
+            emailKey: account.email, // internal history join key; removed before returning the response
+            geoLocale: account.geoLocale ?? 'auto',
+            langCode: account.langCode ?? 'en',
+            hasRecoveryEmail: Boolean(account.recoveryEmail),
+            hasTotp: Boolean(account.totpSecret),
             proxy: proxyUrl
                 ? {
                       url: proxyUrl,
-                      port: envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PORT`) ?? null,
-                      hasCredentials: Boolean(envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_USERNAME`))
+                      port: account.proxy?.port ?? null,
+                      hasCredentials: Boolean(account.proxy?.username)
                   }
                 : null
-        })
-    }
-    return accounts
+        }
+    })
 }
 
 // Kept as a compatibility alias for code that imported the old function name.
@@ -63,16 +137,16 @@ export function buildSingleAccountEnv(accountIndex, sourceEnv = process.env) {
         throw err
     }
 
-    const selectedPrefix = `ACCOUNT_${index}_`
-    const selected = Object.entries(sourceEnv).filter(([key]) => key.startsWith(selectedPrefix))
-    const email = envStrFrom(sourceEnv, `${selectedPrefix}EMAIL`)
-    if (!email) {
+    const accounts = loadConfiguredAccountList(sourceEnv)
+    const account = accounts.find((item, position) => resolveAccountIndex(item, position + 1) === index)
+    if (!account) {
         const err = new Error(`ACCOUNT_${index} is not configured.`)
         err.code = 'BAD_REQUEST'
         throw err
     }
 
     const env = {}
+    env.ACCOUNTS_SOURCE = 'env'
 
     // Blank every configured account variable in the child environment first.
     // Empty strings are treated as unset by the bot's env parser.
@@ -80,16 +154,39 @@ export function buildSingleAccountEnv(accountIndex, sourceEnv = process.env) {
         if (/^ACCOUNT_\d+_/.test(key)) env[key] = ''
     }
 
-    // Copy the chosen slot into slot 1, including any future ACCOUNT_N_* fields
-    // not known by this API yet (password, browser settings, proxy fields, etc.).
-    for (const [key, value] of selected) {
-        const suffix = key.slice(selectedPrefix.length)
-        env[`ACCOUNT_1_${suffix}`] = value
-    }
+    Object.assign(env, accountToEnv(account, 1))
 
     return {
         env,
-        account: { index, email }
+        account: { index, email: account.email }
+    }
+}
+
+export function buildSingleAccountEnvById(accountId, sourceEnv = process.env) {
+    const id = String(accountId ?? '').trim()
+    if (!id) {
+        const err = new Error('`accountId` is required.')
+        err.code = 'BAD_REQUEST'
+        throw err
+    }
+
+    const accounts = loadConfiguredAccountList(sourceEnv)
+    const account = accounts.find(item => item.accountId === id)
+    if (!account) {
+        const err = new Error(`Account is not active or does not exist: ${id}.`)
+        err.code = 'BAD_REQUEST'
+        throw err
+    }
+
+    const env = { ACCOUNTS_SOURCE: 'env' }
+    for (const key of Object.keys(sourceEnv)) {
+        if (/^ACCOUNT_\d+_/.test(key)) env[key] = ''
+    }
+    Object.assign(env, accountToEnv(account, 1))
+
+    return {
+        env,
+        account: { id, index: resolveAccountIndex(account, 1), email: account.email }
     }
 }
 
@@ -112,7 +209,10 @@ export function buildExcludedAccountsEnv(excludedAccountIndexes, sourceEnv = pro
         throw err
     }
 
-    const accounts = loadAccounts(sourceEnv)
+    const accounts = loadConfiguredAccountList(sourceEnv).map((account, position) => ({
+        ...account,
+        index: resolveAccountIndex(account, position + 1)
+    }))
     const knownIndexes = new Set(accounts.map(account => account.index))
     const unknown = excluded.filter(index => !knownIndexes.has(index))
     if (unknown.length) {
@@ -132,18 +232,12 @@ export function buildExcludedAccountsEnv(excludedAccountIndexes, sourceEnv = pro
     }
 
     const env = {}
+    env.ACCOUNTS_SOURCE = 'env'
     for (const key of Object.keys(sourceEnv)) {
         if (/^ACCOUNT_\d+_/.test(key)) env[key] = ''
     }
 
-    included.forEach((account, position) => {
-        const sourcePrefix = `ACCOUNT_${account.index}_`
-        const targetPrefix = `ACCOUNT_${position + 1}_`
-        for (const [key, value] of Object.entries(sourceEnv)) {
-            if (!key.startsWith(sourcePrefix)) continue
-            env[`${targetPrefix}${key.slice(sourcePrefix.length)}`] = value
-        }
-    })
+    included.forEach((account, position) => Object.assign(env, accountToEnv(account, position + 1)))
 
     return {
         env,

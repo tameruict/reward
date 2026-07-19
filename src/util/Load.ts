@@ -3,6 +3,7 @@ import path from 'path'
 
 import type { Account, AccountProxy, ConfigSaveFingerprint } from '../interface/Account'
 import type { Config } from '../interface/Config'
+import { loadAccountsFromDatabase } from './AccountDatabase'
 import { validateAccounts, validateConfig } from './Validator'
 
 let configCache: Config
@@ -107,50 +108,85 @@ function buildProxy(index: string): AccountProxy {
 
 function buildSaveFingerprint(index: string): ConfigSaveFingerprint {
     return {
-        mobile: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_MOBILE`, false),
-        desktop: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_DESKTOP`, false)
+        mobile: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_MOBILE`, true),
+        desktop: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_DESKTOP`, true)
     }
+}
+
+function loadAccountsFromEnv(): Account[] {
+    const accounts: Account[] = []
+
+    for (let i = 1; ; i++) {
+        const index = String(i)
+        const email = envStr(`ACCOUNT_${index}_EMAIL`)
+
+        if (!email) break
+
+        const password = envStr(`ACCOUNT_${index}_PASSWORD`)
+        if (!password) {
+            throw new Error(`ACCOUNT_${index}_EMAIL is set but ACCOUNT_${index}_PASSWORD is missing`)
+        }
+
+        accounts.push({
+            slot: i,
+            email,
+            password,
+            totpSecret: envStr(`ACCOUNT_${index}_TOTP_SECRET`),
+            recoveryEmail: envStr(`ACCOUNT_${index}_RECOVERY_EMAIL`) ?? '',
+            geoLocale: envStr(`ACCOUNT_${index}_GEO_LOCALE`) ?? 'auto',
+            langCode: envStr(`ACCOUNT_${index}_LANG_CODE`) ?? 'en',
+            proxy: buildProxy(index),
+            saveFingerprint: buildSaveFingerprint(index)
+        })
+    }
+
+    return accounts
 }
 
 export function loadAccounts(): Account[] {
     try {
         ensureEnvLoaded()
 
-        const accounts: Account[] = []
-
-        for (let i = 1; ; i++) {
-            const index = String(i)
-            const email = envStr(`ACCOUNT_${index}_EMAIL`)
-
-            if (!email) break
-
-            const password = envStr(`ACCOUNT_${index}_PASSWORD`)
-            if (!password) {
-                throw new Error(`ACCOUNT_${index}_EMAIL is set but ACCOUNT_${index}_PASSWORD is missing`)
-            }
-
-            accounts.push({
-                email,
-                password,
-                totpSecret: envStr(`ACCOUNT_${index}_TOTP_SECRET`),
-                recoveryEmail: envStr(`ACCOUNT_${index}_RECOVERY_EMAIL`) ?? '',
-                geoLocale: envStr(`ACCOUNT_${index}_GEO_LOCALE`) ?? 'auto',
-                langCode: envStr(`ACCOUNT_${index}_LANG_CODE`) ?? 'en',
-                proxy: buildProxy(index),
-                saveFingerprint: buildSaveFingerprint(index)
-            })
+        const projectRoot = getProjectRoot()
+        const source = (envStr('ACCOUNTS_SOURCE') ?? 'database').toLowerCase()
+        if (!['auto', 'database', 'env'].includes(source)) {
+            throw new Error('ACCOUNTS_SOURCE must be one of: auto, database, env')
         }
 
-        if (!accounts.length) {
+        if (source !== 'env') {
+            const databaseAccounts = loadAccountsFromDatabase(projectRoot)
+            if (databaseAccounts?.length) {
+                return requireAccountProxies(validateAccounts(databaseAccounts))
+            }
+            if (source === 'database') {
+                throw new Error(
+                    'No active accounts found in database. Run `npm run accounts:import -- path/to/accounts.json`.'
+                )
+            }
+        }
+
+        const envAccounts = loadAccountsFromEnv()
+        if (!envAccounts.length) {
             throw new Error(
-                'No accounts found in environment. Set ACCOUNT_1_EMAIL / ACCOUNT_1_PASSWORD (see env.example).'
+                'No accounts found. Create data/accounts.db, or set ACCOUNT_1_EMAIL / ACCOUNT_1_PASSWORD in .env.'
             )
         }
 
-        return validateAccounts(accounts)
+        return requireAccountProxies(validateAccounts(envAccounts))
     } catch (error) {
         throw new Error(error instanceof Error ? error.message : String(error))
     }
+}
+
+function requireAccountProxies(accounts: Account[]): Account[] {
+    const missingProxy = accounts.find(account => !account.proxy.url.trim() || Number(account.proxy.port) <= 0)
+    if (missingProxy) {
+        throw new Error(
+            `Account ${missingProxy.email} has no valid proxy. Direct account traffic is disabled; configure proxy URL and port before running.`
+        )
+    }
+
+    return accounts
 }
 
 export function loadConfig(): Config {

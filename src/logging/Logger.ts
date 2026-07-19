@@ -102,6 +102,7 @@ export class Logger {
                     logColor = 'magenta'
                     break
                 default:
+                    logColor = 'cyan'
                     break
             }
         }

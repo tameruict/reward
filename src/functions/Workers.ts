@@ -394,13 +394,27 @@ export class Workers {
                         break
                     }
 
+                    case 'welcometour': {
+                        // Welcome tours are informational UI walkthroughs, not
+                        // reportable Rewards activities. Treat them as a normal
+                        // no-op and move on without the post-activity delay.
+                        this.bot.logger.info(
+                            this.bot.isMobile,
+                            'ACTIVITY',
+                            `Ignoring non-actionable welcome tour "${activity.title}" | offerId=${offerId}`
+                        )
+                        continue
+                    }
+
                     default: {
                         this.bot.logger.warn(
                             this.bot.isMobile,
                             'ACTIVITY',
                             `Skipped activity "${activity.title}" | offerId=${offerId} | Reason: Unsupported type "${activity.promotionType}"`
                         )
-                        break
+                        // No action was performed, so there is no reason to
+                        // apply the human-like delay used after real activities.
+                        continue
                     }
                 }
 

@@ -9,8 +9,9 @@ services:
         volumes:
             - ./config:/usr/src/microsoft-rewards-script/config
             - ./sessions:/usr/src/microsoft-rewards-script/sessions
+            - ./data:/usr/src/microsoft-rewards-script/data
         env_file:
-            # Load account credentials from the .env file (ACCOUNT_1_EMAIL, ACCOUNT_1_PASSWORD, etc.)
+            # Load system settings such as ACCOUNTS_DB_KEY; account rows live in data/accounts.db.
             - path: .env
         environment:
             # ── Scheduler ──────────────────────────────────────
@@ -38,7 +39,7 @@ services:
 
             #  ── Configuration ──────────────────────────────────────
             # Uncomment to override defaults, a full list of configuration options are in the README.
-            #CONFIG_CLUSTERS: '1'
+            #CONFIG_CLUSTERS: '0'
             #... add additional configuration overrides as needed
 
         # ── API mode port mapping ──────────────────────────────────────

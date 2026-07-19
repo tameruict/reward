@@ -1,4 +1,8 @@
 export interface Account {
+    accountId?: string
+    proxyId?: string | null
+    status?: 'ready' | 'active' | 'disabled' | 'running' | 'error' | 'cooldown' | string
+    slot?: number
     email: string
     password: string
     totpSecret?: string

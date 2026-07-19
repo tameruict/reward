@@ -1,0 +1,4 @@
+email,password,proxy_http,proxy_url,proxy_port,proxy_username,proxy_password,proxy_egress_ip,totp_secret,recovery_email,geo_locale,lang_code,status,save_fingerprint_mobile,save_fingerprint_desktop
+account01@example.com,mail-password-01,true,113.160.166.31,39609,proxy-user,proxy-password,113.160.166.31,,,auto,en,ready,true,true
+account02@example.com,mail-password-02,true,113.160.166.31,39609,proxy-user,proxy-password,113.160.166.31,,,auto,en,ready,true,true
+account03@example.com,mail-password-03,true,113.160.166.31,39609,proxy-user,proxy-password,113.160.166.31,,,auto,en,ready

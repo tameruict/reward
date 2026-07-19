@@ -307,6 +307,11 @@ echo "[entrypoint] Config ready."
 # Link the generated config back to the root so the app script can find it
 ln -sf "$CONFIG_FILE" "$SCRIPT_DIR/config.json"
 
+if [ "${QUEUE_WORKER_MODE:-false}" = "true" ]; then
+  echo "[entrypoint] Starting Redis queue worker."
+  exec node scripts/main/queueWorker.js
+fi
+
 # Snapshot the full container environment for cron-spawned runs
 export -p > /etc/container_env
 chmod 600 /etc/container_env

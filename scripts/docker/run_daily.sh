@@ -159,7 +159,13 @@ fi
 
 # Start the actual script
 echo "[$(date)] [run_daily.sh] Starting script..."
-if [ "${API_MODE:-false}" = "true" ]; then
+if [ "${QUEUE_MODE:-false}" = "true" ]; then
+    if npm run queue:schedule; then
+        echo "[$(date)] [run_daily.sh] Queue batch created successfully."
+    else
+        echo "[$(date)] [run_daily.sh] Queue batch was not created (another batch may still be active)." >&2
+    fi
+elif [ "${API_MODE:-false}" = "true" ]; then
     # API-integrated mode: delegate to the API server so the dashboard has full
     # visibility and control.  trigger.js calls POST /start and waits for idle.
     if node scripts/api/trigger.js; then

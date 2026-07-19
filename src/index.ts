@@ -16,6 +16,7 @@ import Utils, { isBrowserClosedError } from './util/Utils'
 import { loadAccounts, loadConfig } from './util/Load'
 import { closeSessionStore } from './util/SessionStore'
 import { checkNodeVersion } from './util/Validator'
+import { buildProxyAwareChunks, groupAccountsByProxy } from './util/ProxyScheduler'
 
 import { Login } from './browser/auth/Login'
 import { Workers } from './functions/Workers'
@@ -49,6 +50,16 @@ interface AccountStats {
     duration: number
     success: boolean
     error?: string
+}
+
+export interface PointCheckResult {
+    accountId: string | null
+    email: string
+    points: number
+    lifetimePoints: number | null
+    lifetimePointsRedeemed: number | null
+    country: string | null
+    checkedAt: string
 }
 
 const executionContext = new AsyncLocalStorage<ExecutionContext>()
@@ -175,64 +186,36 @@ export class MicrosoftRewardsBot {
         const totalAccounts = this.accounts.length
         const runStartTime = Date.now()
 
+        if (!cluster.isPrimary) {
+            this.runWorker(runStartTime)
+            return
+        }
+
+        const proxyRoutes = groupAccountsByProxy(this.accounts).length
+        const accountChunks = buildProxyAwareChunks(this.accounts, this.config.clusters)
+        const effectiveWorkers = accountChunks.length
+        const concurrencyMode = this.config.clusters === 0 ? 'auto' : `max ${this.config.clusters}`
+
         this.logger.info(
             'main',
             'RUN-START',
-            `Starting Microsoft Rewards Script | v${pkg.version} | Accounts: ${totalAccounts} | Clusters: ${this.config.clusters}`
+            `Starting Microsoft Rewards Script | v${pkg.version} | Accounts: ${totalAccounts} | Proxy routes: ${proxyRoutes} | Workers: ${effectiveWorkers} (${concurrencyMode})`
         )
 
-        if (this.config.clusters > 1) {
-            if (cluster.isPrimary) {
-                await this.runMaster(runStartTime)
-            } else {
-                this.runWorker(runStartTime)
-            }
+        if (effectiveWorkers > 1) {
+            await this.runMaster(runStartTime, accountChunks)
         } else {
             await this.runTasks(this.accounts, runStartTime)
         }
     }
 
-    private async runMaster(runStartTime: number): Promise<void> {
+    private async runMaster(runStartTime: number, accountChunks: Account[][]): Promise<void> {
         void this.logger.info('main', 'CLUSTER-PRIMARY', `Primary process started | PID: ${process.pid}`)
 
-        const rawChunks = this.utils.chunkArray(this.accounts, this.config.clusters)
-        const accountChunks = rawChunks.filter(c => c && c.length > 0)
         this.activeWorkers = accountChunks.length
 
         const allAccountStats: AccountStats[] = []
         let hadWorkerFailure = false
-
-        for (const chunk of accountChunks) {
-            const worker = cluster.fork()
-            worker.send?.({ chunk, runStartTime })
-
-            worker.on('message', (msg: { __ipcLog?: IpcLog; __stats?: AccountStats[] }) => {
-                if (msg.__stats) {
-                    allAccountStats.push(...msg.__stats)
-                }
-
-                const log = msg.__ipcLog
-                if (log && typeof log.content === 'string') {
-                    const { webhook } = this.config
-                    const { content, level } = log
-
-                    if (webhook.discord?.enabled && webhook.discord.url) {
-                        sendDiscord(webhook.discord.url, content, level)
-                    }
-                    if (webhook.ntfy?.enabled && webhook.ntfy.url) {
-                        sendNtfy(webhook.ntfy, content, level)
-                    }
-                    if (webhook.telegram?.enabled && webhook.telegram.botToken && webhook.telegram.chatId) {
-                        sendTelegram(webhook.telegram, content, level)
-                    }
-                }
-            })
-
-            // Startup delay for clusters due to resource usage
-            if (accountChunks.indexOf(chunk) !== accountChunks.length - 1) {
-                await this.utils.wait(5000)
-            }
-        }
 
         const onWorkerExit = async (worker: Worker, code?: number, signal?: string): Promise<void> => {
             const { pid } = worker.process
@@ -274,14 +257,47 @@ export class MicrosoftRewardsBot {
             }
         }
 
-        cluster.on('exit', (worker, code, signal) => {
-            void onWorkerExit(worker, code ?? undefined, signal ?? undefined)
-        })
-
         cluster.on('disconnect', worker => {
             const pid = worker.process?.pid
             this.logger.warn('main', 'CLUSTER-WORKER-DISCONNECT', `Worker ${pid ?? '?'} disconnected`)
         })
+
+        for (const [index, chunk] of accountChunks.entries()) {
+            const worker = cluster.fork()
+
+            worker.on('message', (msg: { __ipcLog?: IpcLog; __stats?: AccountStats[] }) => {
+                if (msg.__stats) {
+                    allAccountStats.push(...msg.__stats)
+                }
+
+                const log = msg.__ipcLog
+                if (log && typeof log.content === 'string') {
+                    const { webhook } = this.config
+                    const { content, level } = log
+
+                    if (webhook.discord?.enabled && webhook.discord.url) {
+                        sendDiscord(webhook.discord.url, content, level)
+                    }
+                    if (webhook.ntfy?.enabled && webhook.ntfy.url) {
+                        sendNtfy(webhook.ntfy, content, level)
+                    }
+                    if (webhook.telegram?.enabled && webhook.telegram.botToken && webhook.telegram.chatId) {
+                        sendTelegram(webhook.telegram, content, level)
+                    }
+                }
+            })
+
+            worker.once('exit', (code, signal) => {
+                void onWorkerExit(worker, code ?? undefined, signal ?? undefined)
+            })
+            worker.send?.({ chunk, runStartTime })
+
+            // Preserve the original stagger so several browser processes do not
+            // hit CPU and memory at exactly the same moment.
+            if (index !== accountChunks.length - 1) {
+                await this.utils.wait(5000)
+            }
+        }
     }
 
     private runWorker(runStartTimeFromMaster?: number): void {
@@ -334,6 +350,14 @@ export class MicrosoftRewardsBot {
                 )
 
                 this.http = new HttpClient(account.proxy)
+                if (this.http.usesProxy) {
+                    await this.http.assertProxyReady(true)
+                    this.logger.info(
+                        'main',
+                        'PROXY',
+                        'Proxy route verified for account; direct HTTP fallback is disabled'
+                    )
+                }
 
                 const result: { initialPoints: number; collectedPoints: number } | undefined = await this.Main(
                     account
@@ -399,7 +423,7 @@ export class MicrosoftRewardsBot {
             }
         }
 
-        if (this.config.clusters <= 1 && cluster.isPrimary) {
+        if (cluster.isPrimary) {
             const totalCollectedPoints = accountStats.reduce((sum, s) => sum + s.collectedPoints, 0)
             const totalInitialPoints = accountStats.reduce((sum, s) => sum + s.initialPoints, 0)
             const totalFinalPoints = accountStats.reduce((sum, s) => sum + s.finalPoints, 0)
@@ -421,15 +445,72 @@ export class MicrosoftRewardsBot {
 
     async createDesktopSession(account: Account): Promise<BrowserSession> {
         const session = await this.browserFactory.createBrowser(account)
-        this.mainDesktopPage = await session.context.newPage()
-        this.fingerprintDesktop = session.fingerprint
+        try {
+            this.mainDesktopPage = await session.context.newPage()
+            this.fingerprintDesktop = session.fingerprint
 
-        this.logger.info(this.isMobile, 'BROWSER', `Desktop Browser started | ${account.email}`)
+            this.logger.info(this.isMobile, 'BROWSER', `Desktop Browser started | ${account.email}`)
 
-        await this.login.login(this.mainDesktopPage, account)
-        this.cookies.desktop = await session.context.cookies()
+            await this.login.login(this.mainDesktopPage, account)
+            this.cookies.desktop = await session.context.cookies()
 
-        return session
+            return session
+        } catch (error) {
+            await this.browser.func.closeBrowser(session.context, account.email, false).catch(() => {})
+            throw error
+        }
+    }
+
+    /**
+     * Authenticate one account and read its Rewards balance only.
+     * This path intentionally does not invoke activities, searches, claims,
+     * punch cards, or any other point-earning worker.
+     */
+    async checkAccountPoints(account: Account): Promise<PointCheckResult> {
+        const accountEmail = account.email
+        this.userData.userName = this.utils.getEmailUsername(accountEmail)
+        this.userData.timezoneOffset = String(new Date().getTimezoneOffset())
+        this.userData.langCode = account.langCode ?? 'en'
+        this.browser.func.resetHttpJars()
+
+        let session: BrowserSession | null = null
+        let authenticated = false
+
+        try {
+            return await executionContext.run({ isMobile: true, account }, async () => {
+                this.http = new HttpClient(account.proxy)
+                if (this.http.usesProxy) {
+                    await this.http.assertProxyReady(true)
+                }
+
+                session = await this.browserFactory.createBrowser(account)
+                this.mainMobilePage = await session.context.newPage()
+                this.fingerprintMobile = session.fingerprint
+
+                await this.login.login(this.mainMobilePage, account)
+                authenticated = true
+                this.cookies.mobile = await session.context.cookies()
+
+                const data = await this.browser.func.getDashboardData(this.cookies.mobile)
+                const status = data.dashboard.userStatus
+
+                return {
+                    accountId: account.accountId ?? null,
+                    email: accountEmail,
+                    points: status.availablePoints,
+                    lifetimePoints: status.lifetimePoints ?? null,
+                    lifetimePointsRedeemed: status.lifetimePointsRedeemed ?? null,
+                    country: data.dashboard.userProfile.attributes.country ?? null,
+                    checkedAt: new Date().toISOString()
+                }
+            })
+        } finally {
+            if (session) {
+                await executionContext.run({ isMobile: true, account }, async () => {
+                    await this.browser.func.closeBrowser(session!.context, accountEmail, authenticated)
+                })
+            }
+        }
     }
 
     async Main(account: Account): Promise<{ initialPoints: number; collectedPoints: number }> {
@@ -441,6 +522,7 @@ export class MicrosoftRewardsBot {
 
         let mobileSession: BrowserSession | null = null
         let mobileContextClosed = false
+        let mobileSessionAuthenticated = false
         let desktopSession: BrowserSession | null = null
 
         try {
@@ -452,6 +534,7 @@ export class MicrosoftRewardsBot {
                 this.logger.info('main', 'BROWSER', `Mobile Browser started | ${accountEmail}`)
 
                 await this.login.login(this.mainMobilePage, account)
+                mobileSessionAuthenticated = true
 
                 try {
                     this.accessToken = await this.login.getAppAccessToken(this.mainMobilePage, accountEmail)
@@ -661,7 +744,11 @@ export class MicrosoftRewardsBot {
             if (mobileSession && !mobileContextClosed) {
                 try {
                     await executionContext.run({ isMobile: true, account }, async () => {
-                        await this.browser.func.closeBrowser(mobileSession!.context, accountEmail)
+                        await this.browser.func.closeBrowser(
+                            mobileSession!.context,
+                            accountEmail,
+                            mobileSessionAuthenticated
+                        )
                     })
                 } catch (error) {
                     this.logger.debug(
@@ -744,9 +831,11 @@ async function main(): Promise<void> {
     }
 }
 
-main().catch(async error => {
-    const tmpBot = new MicrosoftRewardsBot()
-    tmpBot.logger.error('main', 'MAIN-ERROR', error as Error)
-    await flushAllWebhooks()
-    process.exit(1)
-})
+if (require.main === module) {
+    main().catch(async error => {
+        const tmpBot = new MicrosoftRewardsBot()
+        tmpBot.logger.error('main', 'MAIN-ERROR', error as Error)
+        await flushAllWebhooks()
+        process.exit(1)
+    })
+}

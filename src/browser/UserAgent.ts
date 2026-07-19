@@ -1,5 +1,4 @@
 import { URLs } from '../constants/urls'
-import { httpRequest } from '../util/Http'
 import type { BrowserFingerprintWithHeaders } from 'fingerprint-generator'
 
 import type { ChromeVersion, EdgeVersion } from '../interface/UserAgentUtil'
@@ -141,7 +140,7 @@ export class UserAgentManager {
                 }
             }
 
-            const response = await httpRequest<ChromeVersion>(request)
+            const response = await this.bot.http.request<ChromeVersion>(request)
             const data: ChromeVersion = response.data
             return data.channels.Stable.version
         } catch (error) {
@@ -164,7 +163,7 @@ export class UserAgentManager {
                 }
             }
 
-            const response = await httpRequest<EdgeVersion[]>(request)
+            const response = await this.bot.http.request<EdgeVersion[]>(request)
             const data: EdgeVersion[] = response.data
             const stable = data.find(x => x.Product == 'Stable') as EdgeVersion
             return {

@@ -114,6 +114,10 @@ export const ConfigSchema = z.object({
 
 // Account
 export const AccountSchema = z.object({
+    accountId: z.string().optional(),
+    proxyId: z.string().nullable().optional(),
+    status: z.string().optional(),
+    slot: z.number().int().positive().optional(),
     email: z.string(),
     password: z.string(),
     totpSecret: z.string().optional(),
@@ -136,7 +140,7 @@ export const AccountSchema = z.object({
 const defaultConfig: Config = {
     sessionPath: 'sessions',
     headless: true,
-    clusters: 1,
+    clusters: 0,
     errorDiagnostics: true,
     ensureStreakProtection: true,
     autoClaimPunchcardRewards: false,

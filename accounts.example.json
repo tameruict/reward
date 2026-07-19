@@ -1,0 +1,32 @@
+{
+    "proxies": [
+        {
+            "label": "proxy-001",
+            "url": "http://127.0.0.1",
+            "port": 8001,
+            "username": "proxy-user",
+            "password": "proxy-password",
+            "proxyHttp": false,
+            "status": "active",
+            "accountCapacity": 6,
+            "egressIp": "127.0.0.1",
+            "cooldownSeconds": 0
+        }
+    ],
+    "accounts": [
+        {
+            "email": "account-001@example.com",
+            "password": "account-password",
+            "totpSecret": "",
+            "recoveryEmail": "",
+            "geoLocale": "auto",
+            "langCode": "en",
+            "proxyLabel": "proxy-001",
+            "status": "ready",
+            "saveFingerprint": {
+                "mobile": true,
+                "desktop": true
+            }
+        }
+    ]
+}
