@@ -1,4 +1,5 @@
-import type { Page } from 'patchright'
+import type { Locator, Page } from 'patchright'
+import { randomBytes } from 'crypto'
 
 import { URLs } from '../../../constants/urls'
 import { QueryCore } from '../../QueryEngine'
@@ -15,7 +16,7 @@ const MAX_MEASUREMENT_FAILURES = 3
 const POINTS_MAX_SEARCHES = 100
 const POINTS_STAGNANT_LIMIT = 10
 
-const SEARCH_BOX = '#sb_form_q'
+const SEARCH_BOX_SELECTORS = ['#sb_form_q', 'textarea[name="q"]', 'input[name="q"]'] as const
 const RESULT_LINK = '#b_results .b_algo h2'
 
 interface SessionStats {
@@ -190,16 +191,17 @@ export class Search extends Workers {
             await this.bot.browser.utils.tryDismissAllMessages(page)
         }
 
+        let lastError: unknown
         for (let attempt = 1; attempt <= MAX_QUERY_ATTEMPTS; attempt++) {
             try {
-                const searchBox = page.locator(SEARCH_BOX)
+                const { selector, searchBox } = await this.ensureSearchBox(page, query, isMobile)
 
                 await page.evaluate(() => window.scrollTo({ left: 0, top: 0, behavior: 'auto' }))
                 await page.keyboard.press('Home')
-                await searchBox.waitFor({ state: 'visible', timeout: 15000 })
+                await searchBox.waitFor({ state: 'visible', timeout: 5000 })
 
                 await this.bot.utils.wait(1000)
-                await this.bot.browser.utils.ghostClick(page, SEARCH_BOX, { clickCount: 3 })
+                await this.bot.browser.utils.ghostClick(page, selector, { clickCount: 3 })
                 await searchBox.fill('')
 
                 await page.keyboard.type(query, { delay: this.bot.utils.randomDelay(45, 90) })
@@ -224,6 +226,7 @@ export class Search extends Workers {
 
                 return
             } catch (error) {
+                lastError = error
                 const message = error instanceof Error ? error.message : String(error)
                 this.bot.logger.warn(
                     isMobile,
@@ -236,8 +239,62 @@ export class Search extends Workers {
                     // locator loop immediately instead of waiting on an empty page.
                     await this.bot.http.assertProxyReady(true)
                 }
+                await this.recoverSearchPage(page, isMobile)
                 await this.bot.utils.wait(2000)
             }
+        }
+
+        throw new Error(
+            `Bing search failed after ${MAX_QUERY_ATTEMPTS} attempts | query="${query}" | ${lastError instanceof Error ? lastError.message : String(lastError)}`
+        )
+    }
+
+    private async ensureSearchBox(
+        page: Page,
+        query: string,
+        isMobile: boolean
+    ): Promise<{ selector: string; searchBox: Locator }> {
+        const existing = await this.visibleSearchBox(page)
+        if (existing) return existing
+
+        await this.recoverSearchPage(page, isMobile)
+
+        const recovered = await this.visibleSearchBox(page, 5000)
+        if (recovered) return recovered
+
+        const cvid = randomBytes(16).toString('hex')
+        await page.goto(URLs.bing.search(query, cvid))
+        await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {})
+        await this.bot.browser.utils.tryDismissAllMessages(page)
+
+        const afterDirectSearch = await this.visibleSearchBox(page, 5000)
+        if (afterDirectSearch) return afterDirectSearch
+
+        const title = await page.title().catch(() => 'unknown')
+        throw new Error(`Bing search box not visible | url=${page.url()} | title="${title}"`)
+    }
+
+    private async visibleSearchBox(page: Page, timeout = 750): Promise<{ selector: string; searchBox: Locator } | null> {
+        for (const selector of SEARCH_BOX_SELECTORS) {
+            const searchBox = page.locator(selector).first()
+            const visible = await searchBox.isVisible({ timeout }).catch(() => false)
+            if (visible) return { selector, searchBox }
+        }
+        return null
+    }
+
+    private async recoverSearchPage(page: Page, isMobile: boolean): Promise<void> {
+        const before = page.url()
+        await this.bot.browser.utils.reloadBadPage(page).catch(() => false)
+        await this.bot.browser.utils.tryDismissAllMessages(page)
+        if (await this.visibleSearchBox(page).catch(() => null)) return
+
+        await page.goto(URLs.bing.origin)
+        await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {})
+        await this.bot.browser.utils.tryDismissAllMessages(page)
+
+        if (before !== page.url()) {
+            this.bot.logger.debug(isMobile, 'SEARCH-BING', `Recovered search page | from=${before} | to=${page.url()}`)
         }
     }
 
