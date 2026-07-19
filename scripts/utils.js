@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url'
 import { DatabaseSync } from 'node:sqlite'
 import chalk from 'chalk'
 import { decryptAccountSecret } from './accountSecrets.js'
+import { parseProxyParts } from './proxyIdentity.js'
 
 const DEFAULT_ACCOUNTS_DB_PATH = path.join('data', 'accounts.db')
 
@@ -406,23 +407,20 @@ export function getUserAgent(fingerprint) {
 
 export function buildProxyConfig(account) {
     if (!account?.proxy?.url || !account.proxy.port) {
-        return null
+        const parsed = parseProxyParts(account?.proxy)
+        if (!parsed.host || !parsed.port) return null
     }
 
-    const rawUrl = account.proxy.url.trim()
-    const hasProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(rawUrl)
-    const parsed = new URL(hasProtocol ? rawUrl : `http://${rawUrl}`)
-    const port = Number(account.proxy.port || parsed.port)
-    if (!parsed.hostname || !Number.isInteger(port) || port < 1 || port > 65535) return null
+    const parsed = parseProxyParts(account.proxy)
+    if (!parsed.host || !Number.isInteger(parsed.port) || parsed.port < 1 || parsed.port > 65535) return null
 
-    const protocol = hasProtocol ? parsed.protocol.replace(':', '') : 'http'
     const proxy = {
-        server: `${protocol}://${parsed.hostname}:${port}`
+        server: `${parsed.protocol}://${parsed.host}:${parsed.port}`
     }
 
-    if (account.proxy.username && account.proxy.password) {
-        proxy.username = account.proxy.username
-        proxy.password = account.proxy.password
+    if (parsed.username && parsed.password) {
+        proxy.username = parsed.username
+        proxy.password = parsed.password
     }
 
     return proxy

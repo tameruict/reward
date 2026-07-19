@@ -1,7 +1,7 @@
 import { Impit } from 'impit'
 import type { HttpMethod, ImpitResponse, RequestInit as ImpitRequestInit } from 'impit'
-import { URL } from 'url'
 import type { AccountProxy } from '../interface/Account'
+import { formatProxyUrl, parseProxyConfig } from './ProxyConfig'
 
 const DEFAULT_TIMEOUT = 20000
 const PROXY_HEALTHCHECK_TIMEOUT = 12000
@@ -201,7 +201,7 @@ class HttpClient {
 
     constructor(account: AccountProxy) {
         this.account = account
-        this.proxyUrl = this.account.url.trim() ? this.buildProxyUrl(this.account) : undefined
+        this.proxyUrl = this.account.url.trim() ? formatProxyUrl(this.account) : undefined
         this.proxyKey = this.proxyUrl ? this.buildProxyKey(this.account) : undefined
         this.usesProxy = Boolean(this.proxyUrl)
         this.instance = this.createInstance()
@@ -274,8 +274,8 @@ class HttpClient {
     }
 
     private buildProxyKey(proxyConfig: AccountProxy): string {
-        const urlObj = new URL(this.buildProxyUrl(proxyConfig))
-        return `${urlObj.protocol}//${urlObj.hostname}:${urlObj.port}|${proxyConfig.username}`
+        const parsed = parseProxyConfig(proxyConfig)
+        return `${parsed.protocol}://${parsed.host}:${parsed.port}|${parsed.username}`
     }
 
     private throwIfProxyCircuitOpen(): void {
@@ -307,34 +307,6 @@ class HttpClient {
         })
     }
 
-    private buildProxyUrl(proxyConfig: AccountProxy): string {
-        const { url: baseUrl, port, username, password } = proxyConfig
-
-        let urlObj: URL
-        try {
-            urlObj = new URL(baseUrl)
-        } catch {
-            try {
-                urlObj = new URL(`http://${baseUrl}`)
-            } catch {
-                throw new Error(`Invalid proxy URL format: ${baseUrl}`)
-            }
-        }
-
-        const protocol = urlObj.protocol.toLowerCase()
-        if (!['http:', 'https:', 'socks4:', 'socks5:'].includes(protocol)) {
-            throw new Error(`Unsupported proxy protocol: ${protocol}. Only HTTP(S) and SOCKS4/5 are supported!`)
-        }
-
-        if (username && password) {
-            urlObj.username = encodeURIComponent(username)
-            urlObj.password = encodeURIComponent(password)
-            urlObj.port = port.toString()
-            return urlObj.toString()
-        }
-
-        return `${protocol}//${urlObj.hostname}:${port}`
-    }
 }
 
 let sharedInstance: Impit | undefined

@@ -1,24 +1,9 @@
 import type { Account } from '../interface/Account'
+import { accountProxyRouteKey } from './ProxyConfig'
 
 export interface ProxyLane {
     routeKey: string
     accounts: Account[]
-}
-
-function normalizeProxyEndpoint(value: string): { server: string; embeddedPort: number } {
-    const raw = value.trim()
-    if (!raw) return { server: '', embeddedPort: 0 }
-
-    const withProtocol = raw.includes('://') ? raw : `http://${raw}`
-    try {
-        const parsed = new URL(withProtocol)
-        return {
-            server: `${parsed.protocol.toLowerCase()}//${parsed.hostname.toLowerCase()}`,
-            embeddedPort: Number(parsed.port)
-        }
-    } catch {
-        return { server: raw.toLowerCase().replace(/\/+$/, ''), embeddedPort: 0 }
-    }
 }
 
 /**
@@ -29,13 +14,7 @@ function normalizeProxyEndpoint(value: string): { server: string; embeddedPort: 
 export function accountRouteKey(account: Account): string {
     const proxy = account.proxy
     if (!proxy?.url.trim()) return 'direct:default'
-    const endpoint = normalizeProxyEndpoint(proxy.url)
-
-    return JSON.stringify({
-        server: endpoint.server,
-        port: Number(proxy.port) || endpoint.embeddedPort,
-        username: proxy.username.trim()
-    })
+    return accountProxyRouteKey(proxy)
 }
 
 export function groupAccountsByProxy(accounts: Account[]): ProxyLane[] {

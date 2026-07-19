@@ -54,6 +54,37 @@ test('a configured account proxy is enforced even when legacy proxyHttp is false
     }
 })
 
+test('a full proxy URL with embedded credentials is accepted', async () => {
+    const requests = []
+    const proxy = http.createServer((request, response) => {
+        requests.push(request.url)
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({ routedThroughProxy: true }))
+    })
+    const port = await listen(proxy)
+
+    try {
+        const client = new HttpClient({
+            proxyHttp: false,
+            url: `http://tam:tam317@127.0.0.1:${port}`,
+            port: 0,
+            username: '',
+            password: ''
+        })
+        const response = await client.request({
+            url: 'http://account-traffic.invalid/full-url-proxy',
+            method: 'GET'
+        })
+
+        assert.equal(client.usesProxy, true)
+        assert.deepEqual(response.data, { routedThroughProxy: true })
+        assert.equal(requests.length, 1)
+        assert.match(requests[0], /account-traffic\.invalid\/full-url-proxy/)
+    } finally {
+        await close(proxy)
+    }
+})
+
 test('a transient proxy health-check failure is retried before the route is rejected', async () => {
     let attempts = 0
     const transport = {

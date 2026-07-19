@@ -5,6 +5,7 @@ import net from 'node:net'
 
 import type { MicrosoftRewardsBot } from '../index'
 import { loadSession, saveFingerprint } from '../util/SessionStore'
+import { parseProxyConfig } from '../util/ProxyConfig'
 import { UserAgentManager } from './UserAgent'
 
 import type { Account, AccountProxy } from '../interface/Account'
@@ -60,13 +61,14 @@ class Browser {
                 await this.assertProxyReachable(account.proxy)
             }
 
+            const parsedProxy = parseProxyConfig(account.proxy)
             const proxyConfig = account.proxy.url
                 ? {
-                      server: this.formatProxyServer(account.proxy),
-                      ...(account.proxy.username &&
-                          account.proxy.password && {
-                              username: account.proxy.username,
-                              password: account.proxy.password
+                      server: parsedProxy.server,
+                      ...(parsedProxy.username &&
+                          parsedProxy.password && {
+                              username: parsedProxy.username,
+                              password: parsedProxy.password
                           })
                   }
                 : undefined
@@ -190,28 +192,8 @@ class Browser {
         }
     }
 
-    private formatProxyServer(proxy: AccountProxy): string {
-        const { host, port, protocol } = this.parseProxyEndpoint(proxy)
-        return `${protocol}://${host}:${port}`
-    }
-
-    private parseProxyEndpoint(proxy: AccountProxy): { host: string; port: number; protocol: string } {
-        const rawUrl = proxy.url.trim()
-        const hasProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(rawUrl)
-        const parsed = new URL(hasProtocol ? rawUrl : `http://${rawUrl}`)
-        const host = parsed.hostname
-        const port = Number(proxy.port || parsed.port)
-        const protocol = hasProtocol ? parsed.protocol.replace(':', '') : 'http'
-
-        if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
-            throw new Error('Invalid proxy configuration: a valid host and port are required')
-        }
-
-        return { host, port, protocol }
-    }
-
     private async assertProxyReachable(proxy: AccountProxy): Promise<void> {
-        const { host, port } = this.parseProxyEndpoint(proxy)
+        const { host, port } = parseProxyConfig(proxy)
 
         await new Promise<void>((resolve, reject) => {
             const socket = net.createConnection({ host, port })

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { DatabaseSync } from 'node:sqlite'
 
 import { deleteAccountRecords, getAccountStoreStats, importAccountBundle, listAccountRows } from './accountStore.js'
 import { JobStore } from './queue/jobStore.js'
@@ -137,6 +138,28 @@ test('one proxy may hold more than six accounts but still schedules one proxy la
             assert.equal(batch.lockGroups, 1)
         } finally {
             store.close()
+        }
+    })
+})
+
+test('importAccountBundle stores full proxy URLs with embedded credentials', () => {
+    withTemporaryAccountStore(() => {
+        importAccountBundle(process.cwd(), {
+            proxies: [{ label: 'full-url-proxy', url: 'http://tam:tam317@14.224.225.129:28682' }],
+            accounts: [{ email: 'full-url@example.com', password: 'secret', proxyLabel: 'full-url-proxy' }]
+        })
+
+        const db = new DatabaseSync(process.env.ACCOUNTS_DB_PATH, { readOnly: true })
+        try {
+            const proxy = db
+                .prepare('SELECT url, port, username FROM proxies WHERE label = ?')
+                .get('full-url-proxy')
+
+            assert.equal(proxy.url, 'http://tam:tam317@14.224.225.129:28682')
+            assert.equal(proxy.port, 28682)
+            assert.equal(proxy.username, 'tam')
+        } finally {
+            db.close()
         }
     })
 })

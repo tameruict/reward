@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parse as parseCsv } from 'csv-parse/sync'
 
-import { automaticProxyLabel } from './proxyIdentity.js'
+import { automaticProxyLabel, parseProxyParts } from './proxyIdentity.js'
 
 const FIELD_ALIASES = new Map([
     ['mail', 'email'],
@@ -35,10 +35,15 @@ function normalizeRecord(record) {
 }
 
 function autoProxyLabel(record) {
+    const parsed = parseProxyParts({
+        url: record.proxy_url,
+        port: record.proxy_port,
+        username: record.proxy_username
+    })
     return automaticProxyLabel({
         url: record.proxy_url,
-        port: Number(record.proxy_port),
-        username: record.proxy_username ?? ''
+        port: parsed.port,
+        username: parsed.username
     })
 }
 
@@ -53,16 +58,22 @@ function recordsToBundle(rawRecords) {
         const hasProxyDetails = Boolean(record.proxy_url || record.proxy_port)
         let proxyLabel = record.proxy_label || ''
         if (hasProxyDetails) {
-            if (!record.proxy_url || !record.proxy_port) {
-                throw new Error(`Import row ${index + 1} must provide both proxy_url and proxy_port.`)
+            const parsed = parseProxyParts({
+                url: record.proxy_url,
+                port: record.proxy_port,
+                username: record.proxy_username,
+                password: record.proxy_password
+            })
+            if (!record.proxy_url || !parsed.port) {
+                throw new Error(`Import row ${index + 1} must provide proxy_url with a port or proxy_port.`)
             }
             proxyLabel ||= autoProxyLabel(record)
             const proxy = {
                 label: proxyLabel,
                 url: record.proxy_url,
-                port: record.proxy_port,
-                username: record.proxy_username,
-                password: record.proxy_password,
+                port: parsed.port,
+                username: parsed.username,
+                password: parsed.password,
                 proxyHttp: record.proxy_http,
                 status: record.proxy_status || 'active',
                 accountCapacity: record.account_capacity || 1,

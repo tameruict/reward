@@ -2,6 +2,7 @@ import net from 'node:net'
 import rebrowser from 'patchright'
 
 import { buildProxyConfig, getDirname, getProjectRoot, loadAccounts } from '../utils.js'
+import { parseProxyParts } from '../proxyIdentity.js'
 
 const projectRoot = getProjectRoot(getDirname(import.meta.url))
 const accounts = loadAccounts(projectRoot)
@@ -21,9 +22,7 @@ function safeError(error) {
 }
 
 function parseEndpoint(proxy) {
-    const rawUrl = proxy.url.trim()
-    const parsed = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(rawUrl) ? rawUrl : `http://${rawUrl}`)
-    return { host: parsed.hostname, port: Number(proxy.port || parsed.port) }
+    return parseProxyParts(proxy)
 }
 
 async function checkTcp(proxy) {

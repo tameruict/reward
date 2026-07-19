@@ -4,6 +4,7 @@ import path from 'path'
 import type { Account, AccountProxy, ConfigSaveFingerprint } from '../interface/Account'
 import type { Config } from '../interface/Config'
 import { loadAccountsFromDatabase } from './AccountDatabase'
+import { parseProxyConfig } from './ProxyConfig'
 import { validateAccounts, validateConfig } from './Validator'
 
 let configCache: Config
@@ -179,11 +180,14 @@ export function loadAccounts(): Account[] {
 }
 
 function requireAccountProxies(accounts: Account[]): Account[] {
-    const missingProxy = accounts.find(account => !account.proxy.url.trim() || Number(account.proxy.port) <= 0)
-    if (missingProxy) {
-        throw new Error(
-            `Account ${missingProxy.email} has no valid proxy. Direct account traffic is disabled; configure proxy URL and port before running.`
-        )
+    for (const account of accounts) {
+        try {
+            parseProxyConfig(account.proxy)
+        } catch {
+            throw new Error(
+                `Account ${account.email} has no valid proxy. Direct account traffic is disabled; configure proxy URL and port before running.`
+            )
+        }
     }
 
     return accounts

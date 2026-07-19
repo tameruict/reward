@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { ensureAccountsDatabase, resolveAccountsDbPath } from './utils.js'
 import { encryptAccountSecret } from './accountSecrets.js'
-import { proxyIdentityKey } from './proxyIdentity.js'
+import { formatProxyUrl, parseProxyParts, proxyIdentityKey } from './proxyIdentity.js'
 
 const ACCOUNT_STATUSES = new Set(['ready', 'active', 'disabled', 'error', 'cooldown'])
 const PROXY_STATUSES = new Set(['active', 'disabled', 'error', 'cooldown'])
@@ -39,10 +39,11 @@ function normalizeProxy(raw, fallbackLabel) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Each proxy must be a JSON object.')
 
     const label = text(raw.label, fallbackLabel)
-    const url = text(raw.url)
-    const port = positiveInt(raw.port, 0, `Proxy ${label || '(unlabelled)'} port`)
+    const parsedProxy = parseProxyParts(raw)
+    const url = text(formatProxyUrl(parsedProxy))
+    const port = positiveInt(parsedProxy.port, 0, `Proxy ${label || '(unlabelled)'} port`)
     if (!label) fail('Every proxy requires a unique label.')
-    if (!url) fail(`Proxy ${label} requires url.`)
+    if (!parsedProxy.host) fail(`Proxy ${label} requires url.`)
     if (!port) fail(`Proxy ${label} requires port.`)
 
     const status = text(raw.status, 'active').toLowerCase()
@@ -54,7 +55,7 @@ function normalizeProxy(raw, fallbackLabel) {
         `Proxy ${label} accountCapacity`
     )
 
-    const username = text(raw.username)
+    const username = text(parsedProxy.username)
     const egressIp = text(raw.egressIp ?? raw.egress_ip)
     if (egressIp && !net.isIP(egressIp)) fail(`Proxy ${label} has invalid egressIp: ${egressIp}.`)
     return {
@@ -65,7 +66,7 @@ function normalizeProxy(raw, fallbackLabel) {
         url,
         port,
         username,
-        password: encryptAccountSecret(text(raw.password)),
+        password: encryptAccountSecret(text(parsedProxy.password)),
         status,
         maxConcurrency: 1,
         accountCapacity,

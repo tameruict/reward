@@ -48,6 +48,18 @@ test('an embedded proxy port is treated like the explicit port used by the brows
     assert.equal(accountRouteKey(embedded), accountRouteKey(explicit))
 })
 
+test('an embedded proxy credential URL matches the split proxy fields', () => {
+    const embedded = account('one@example.com', { url: 'http://worker:secret@proxy.example.com:8080' })
+    const explicit = account('two@example.com', {
+        url: 'http://proxy.example.com',
+        port: 8080,
+        username: 'worker',
+        password: 'secret'
+    })
+
+    assert.equal(accountRouteKey(embedded), accountRouteKey(explicit))
+})
+
 test('automatic mode creates one sequential lane per proxy', () => {
     const accounts = [
         account('a1@example.com', { url: 'proxy-a.test', port: 8001 }),
