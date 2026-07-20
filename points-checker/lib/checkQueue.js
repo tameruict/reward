@@ -15,7 +15,7 @@ class CheckQueue {
   constructor(database, eventHub) {
     this.database = database;
     this.eventHub = eventHub;
-    this.maxConcurrency = Math.min(Math.max(Number(process.env.MAX_CONCURRENCY) || 3, 1), 12);
+    this.maxConcurrency = Math.min(Math.max(Number(process.env.MAX_CONCURRENCY) || 6, 1), 12);
     this.timeoutMs = Math.min(Math.max(Number(process.env.CHECK_TIMEOUT_MS) || 180000, 30000), 900000);
     this.activeRun = null;
   }
@@ -122,10 +122,14 @@ class CheckQueue {
       let stderrBuffer = "";
       let result = null;
       let reportedError = null;
+      let forceKillTimer = null;
       const timer = setTimeout(() => {
-        child.kill("SIGTERM");
         reportedError = { code: "timeout", message: `Point check exceeded ${this.timeoutMs} ms` };
+        this.terminateWorker(child);
+        forceKillTimer = setTimeout(() => this.forceKillWorker(child), 5000);
+        forceKillTimer.unref?.();
       }, this.timeoutMs);
+      timer.unref?.();
 
       const consume = (chunk, isError) => {
         const value = chunk.toString("utf8");
@@ -148,10 +152,12 @@ class CheckQueue {
       child.stderr.on("data", chunk => consume(chunk, true));
       child.on("error", error => {
         clearTimeout(timer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
         reject(Object.assign(error, { code: "worker_start_failed" }));
       });
       child.on("exit", code => {
         clearTimeout(timer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
         if (result && code === 0) return resolve(result);
         const detail = reportedError || {
           code: code === null ? "worker_terminated" : "worker_failed",
@@ -160,6 +166,24 @@ class CheckQueue {
         reject(Object.assign(new Error(detail.message || "Point check failed"), { code: detail.code || "worker_failed" }));
       });
     });
+  }
+
+  terminateWorker(child) {
+    if (!child.pid || child.killed) return;
+    try { child.kill("SIGTERM"); } catch {}
+  }
+
+  forceKillWorker(child) {
+    if (!child.pid) return;
+    if (process.platform === "win32") {
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      killer.unref();
+      return;
+    }
+    try { child.kill("SIGKILL"); } catch {}
   }
 
   finish() {

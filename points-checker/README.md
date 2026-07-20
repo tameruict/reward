@@ -18,6 +18,8 @@ Open <http://127.0.0.1:8891>.
 
 The default database path is `../data/accounts.db`. Keep `ACCOUNTS_DB_KEY` identical to the value used by the parent bot when database credentials are encrypted.
 
+When a valid mobile session is already saved, a point check reads `/api/getuserinfo` directly and skips Chromium/login/bootstrap. Set `MAX_CONCURRENCY` to the number of proxy routes your machine can handle; accounts sharing one proxy remain serialized automatically. The default is 6.
+
 ## Safety model
 
 - Each account uses its assigned proxy; there is no direct-network fallback.

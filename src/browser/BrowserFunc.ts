@@ -13,6 +13,7 @@ import type { Counters, DashboardData } from './../interface/DashboardData'
 import type { AppUserData } from '../interface/AppUserData'
 import type { AppEarnablePoints, BrowserEarnablePoints, MissingSearchPoints } from '../interface/Points'
 import type { AppDashboardData } from '../interface/AppDashBoardData'
+import type { PageSnapshot } from './ReactFunc'
 
 // Bing-hosted image used to seed the daily visual search. /images/kblob fetches it (Can be changed)
 const VISUAL_SEARCH_IMAGE_URL = 'https://th.bing.com/th?id=OMR.VisualSearch.VNext.BackgroundImage.png&pid=Rewards'
@@ -326,13 +327,12 @@ export default class BrowserFunc {
                 )
             }
 
-            const snapshotHtml = earnHtml || dashboardHtml
-            this.bot.reactSnapshot = this.bot.browser.react.snapshotPage(snapshotHtml)
+            this.bot.reactSnapshot = this.bot.browser.react.snapshotPage([earnHtml, dashboardHtml])
 
             // Discover chunks from both pages when the optional /earn request succeeds.
             this.bot.nextActions = await this.resolveActionIds(page, [dashboardHtml, earnHtml])
 
-            const dashboardRendered = /<section\b[^>]*\bid=["']dailyset["']/i.test(dashboardHtml)
+            const dashboardRendered = /<section\b[^>]*\bid=["']dailyset["']/i.test(`${earnHtml}\n${dashboardHtml}`)
             if (!dashboardRendered) {
                 throw new Error(
                     'Rewards dashboard did not render (no section#dailyset) - likely a login/redirect issue, aborting'
@@ -364,7 +364,8 @@ export default class BrowserFunc {
             this.bot.logger.info(
                 this.bot.isMobile,
                 'BUILD',
-                `Rewards build | id=${this.bot.browser.react.buildId(snapshotHtml) ?? 'unknown'}`
+                `Rewards build | id=${this.bot.browser.react.buildId(`${earnHtml}\n${dashboardHtml}`) ?? 'unknown'}`,
+                'cyan'
             )
         } catch (error) {
             // The login flow owns this recoverable redirect and will resume the
@@ -996,6 +997,24 @@ export default class BrowserFunc {
             )
             return null
         }
+    }
+
+    async refreshEarnSnapshot(): Promise<PageSnapshot | null> {
+        const page = this.bot.isMobile ? this.bot.mainMobilePage : this.bot.mainDesktopPage
+        if (!page || page.isClosed()) return null
+
+        const fetchPage = async (url: string): Promise<string | null> => {
+            try {
+                const res = await page.request.get(url, { timeout: 20000 })
+                return res.ok() ? await res.text() : null
+            } catch {
+                return null
+            }
+        }
+
+        const pages = (await Promise.all([fetchPage(URLs.rewards.earn), fetchPage(URLs.rewards.dashboard)]))
+            .filter((html): html is string => html !== null)
+        return pages.length ? this.bot.browser.react.snapshotPage(pages) : null
     }
 
     resetHttpJars(): void {

@@ -153,13 +153,93 @@ function parseTextBlocks(content) {
     return recordsToBundle(records)
 }
 
+function parsePipeProxy(value, rowNumber) {
+    const rawProxy = String(value ?? '').trim()
+    if (!rawProxy) throw new Error(`Import row ${rowNumber} is missing proxy.`)
+
+    // Also accept a normal URL so this format can be mixed into existing workflows.
+    if (/^[a-z][a-z\d+.-]*:\/\//i.test(rawProxy)) {
+        const parsed = parseProxyParts({ url: rawProxy })
+        if (!parsed.host || !parsed.port) {
+            throw new Error(`Import row ${rowNumber} has an invalid proxy; expected host:port:user:pass.`)
+        }
+        return {
+            proxy_url: parsed.host,
+            proxy_port: String(parsed.port),
+            proxy_username: parsed.username,
+            proxy_password: parsed.password
+        }
+    }
+
+    const parts = rawProxy.split(':')
+    if (parts.length < 4) {
+        throw new Error(`Import row ${rowNumber} has an invalid proxy; expected host:port:user:pass.`)
+    }
+
+    const [host, port, username, ...passwordParts] = parts
+    if (!host || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535 || !username) {
+        throw new Error(`Import row ${rowNumber} has an invalid proxy; expected host:port:user:pass.`)
+    }
+
+    return {
+        proxy_url: host,
+        proxy_port: port,
+        proxy_username: username,
+        // Keep any additional colons in the proxy password.
+        proxy_password: passwordParts.join(':')
+    }
+}
+
+function parsePipeRows(content) {
+    const records = []
+    for (const [lineIndex, rawLine] of content.split(/\r?\n/).entries()) {
+        const line = rawLine.trim()
+        if (!line || line === '---' || line.startsWith('#')) continue
+
+        const fields = line.split('|')
+        if (fields.length !== 3) {
+            throw new Error(`Invalid pipe import row ${lineIndex + 1}: expected email|password|host:port:user:pass.`)
+        }
+
+        const [email, password, proxy] = fields.map(field => field.trim())
+        if (!email) throw new Error(`Import row ${lineIndex + 1} is missing email.`)
+        if (!password) throw new Error(`Import row ${lineIndex + 1} is missing password.`)
+
+        records.push({
+            email,
+            password,
+            proxy_http: 'true',
+            ...parsePipeProxy(proxy, lineIndex + 1)
+        })
+    }
+
+    return recordsToBundle(records)
+}
+
+function parseTextFile(content) {
+    const dataLines = content
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line && line !== '---' && !line.startsWith('#'))
+    const pipeLines = dataLines.filter(line => line.includes('|'))
+
+    if (pipeLines.length) {
+        if (pipeLines.length !== dataLines.length || dataLines.some(line => line.includes('='))) {
+            throw new Error('Do not mix pipe rows with KEY=value account blocks in the same .txt file.')
+        }
+        return parsePipeRows(content)
+    }
+
+    return parseTextBlocks(content)
+}
+
 export function loadAccountImportFile(inputPath) {
     const absolutePath = path.resolve(process.cwd(), inputPath)
     const content = fs.readFileSync(absolutePath, 'utf8')
     const extension = path.extname(absolutePath).toLowerCase()
 
     if (extension === '.csv') return parseCsvFile(content)
-    if (extension === '.txt') return parseTextBlocks(content)
+    if (extension === '.txt') return parseTextFile(content)
     if (extension === '.json') return JSON.parse(content)
     throw new Error('Unsupported import file. Use .csv, .txt, or .json.')
 }

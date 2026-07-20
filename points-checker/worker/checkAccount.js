@@ -10,7 +10,8 @@ function classifyError(error) {
   const message = String(error?.message || error || "Unknown point-check error");
   const lower = message.toLowerCase();
   let code = "error";
-  if (lower.includes("captcha") || lower.includes("funcaptcha")) code = "needs_interaction";
+  if (lower.includes("suspended")) code = "account_suspended";
+  else if (lower.includes("captcha") || lower.includes("funcaptcha")) code = "needs_interaction";
   else if (lower.includes("number matching") || lower.includes("approval")) code = "needs_interaction";
   else if (lower.includes("authentication") || lower.includes("login")) code = "auth_required";
   else if (lower.includes("429") || lower.includes("rate limit")) code = "rate_limited";

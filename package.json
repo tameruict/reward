@@ -1,6 +1,6 @@
 {
     "name": "microsoft-rewards-script",
-    "version": "4.0.3",
+    "version": "4.1.0",
     "description": "Automatically do tasks for Microsoft Rewards but in TS!",
     "author": "Netsky",
     "license": "GPL-3.0-or-later",
@@ -33,7 +33,7 @@
         "queue:status": "node --no-warnings ./scripts/main/queueStatus.js",
         "queue:dispatch": "node --no-warnings ./scripts/main/queueStatus.js --dispatch",
         "test:queue": "node --test ./scripts/queue/queue.test.js",
-        "test:accounts": "node --test ./scripts/accountStore.test.js",
+        "test:accounts": "node --test ./scripts/accountStore.test.js ./scripts/accountImport.test.js",
         "test:proxies": "node --test ./scripts/proxyCleanup.test.js",
         "test:proxy-enforcement": "npm run build && node --test ./scripts/proxyEnforcement.test.js",
         "test:proxy-scheduler": "npm run build && node --test ./scripts/proxyScheduler.test.js",

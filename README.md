@@ -78,6 +78,20 @@ npm run accounts -- list
 
 Rows containing the same proxy URL, port, and username are automatically grouped under one proxy record. The importer also accepts `accounts.txt` blocks with plain `EMAIL=...`, `PASSWORD=...`, and `PROXY_*=...` fields separated by blank lines, plus the normalized JSON format for advanced use.
 
+For a compact text import, each non-empty line in an `.txt` file may use:
+
+```text
+email|password|proxy-host:proxy-port:proxy-username:proxy-password
+```
+
+Example:
+
+```text
+meliorakerenzagoldwin3@hotmail.com|31wOP1986|14.241.72.182:18755:tam:tam317
+```
+
+Import it with `npm run accounts:import -- ./accounts.local.txt`. Pipe rows are automatically grouped when they use the same proxy host, port, and username. Keep this file private because it contains account and proxy credentials.
+
 Proxy identity is based on protocol, host, port, and username. Changing `PROXY_HTTP`, password, status, or egress IP updates the existing proxy instead of creating another record. To reconcile duplicate rows created by an older version:
 
 ```bash
