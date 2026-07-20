@@ -14,7 +14,7 @@ export default class Activities {
     doEnsureStreakProtection: () => Promise<void>;
     doClaimReward: (child: QuestChild, parentId: string) => Promise<void>;
     doActivateSearchPerk: (data: DashboardData) => Promise<void>;
-    doVisualSearch: (data: DashboardData) => Promise<number>;
+    doVisualSearch: () => Promise<number>;
     doAppReward: (promotion: Promotion) => Promise<void>;
     doReadToEarn: () => Promise<void>;
     doDailyCheckIn: () => Promise<void>;

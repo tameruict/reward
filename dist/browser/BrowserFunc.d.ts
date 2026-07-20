@@ -3,7 +3,6 @@ import type { MicrosoftRewardsBot } from '../index';
 import type { Counters, DashboardData } from './../interface/DashboardData';
 import type { AppEarnablePoints, BrowserEarnablePoints, MissingSearchPoints } from '../interface/Points';
 import type { AppDashboardData } from '../interface/AppDashBoardData';
-import type { PageSnapshot } from './ReactFunc';
 export declare class RewardsAuthenticationRequiredError extends Error {
     readonly destination: string;
     constructor(finalUrl: string);
@@ -62,7 +61,6 @@ export default class BrowserFunc {
         query: string;
         serpUrl: string;
     } | null>;
-    refreshEarnSnapshot(): Promise<PageSnapshot | null>;
     resetHttpJars(): void;
     private getBingJar;
     private mergeSetCookies;

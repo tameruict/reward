@@ -240,10 +240,11 @@ class BrowserFunc {
             catch (error) {
                 this.bot.logger.warn(this.bot.isMobile, 'BOOTSTRAP', `Failed to fetch optional /earn HTML | error=${error instanceof Error ? error.message : String(error)} - continuing with /dashboard context`);
             }
-            this.bot.reactSnapshot = this.bot.browser.react.snapshotPage([earnHtml, dashboardHtml]);
+            const snapshotHtml = earnHtml || dashboardHtml;
+            this.bot.reactSnapshot = this.bot.browser.react.snapshotPage(snapshotHtml);
             // Discover chunks from both pages when the optional /earn request succeeds.
             this.bot.nextActions = await this.resolveActionIds(page, [dashboardHtml, earnHtml]);
-            const dashboardRendered = /<section\b[^>]*\bid=["']dailyset["']/i.test(`${earnHtml}\n${dashboardHtml}`);
+            const dashboardRendered = /<section\b[^>]*\bid=["']dailyset["']/i.test(dashboardHtml);
             if (!dashboardRendered) {
                 throw new Error('Rewards dashboard did not render (no section#dailyset) - likely a login/redirect issue, aborting');
             }
@@ -254,7 +255,7 @@ class BrowserFunc {
                 this.bot.logger.warn(this.bot.isMobile, 'BOOTSTRAP', 'No action ids discovered - server-action calls will fail (bundle may have stripped names)');
             }
             this.bot.logger.info(this.bot.isMobile, 'BOOTSTRAP', `Context ready | actions=${Object.keys(this.bot.nextActions).length} | reportable=${this.bot.reactSnapshot.reportable.length} | available=${this.bot.reactSnapshot.account.availablePoints}`);
-            this.bot.logger.info(this.bot.isMobile, 'BUILD', `Rewards build | id=${this.bot.browser.react.buildId(`${earnHtml}\n${dashboardHtml}`) ?? 'unknown'}`, 'cyan');
+            this.bot.logger.info(this.bot.isMobile, 'BUILD', `Rewards build | id=${this.bot.browser.react.buildId(snapshotHtml) ?? 'unknown'}`);
         }
         catch (error) {
             // The login flow owns this recoverable redirect and will resume the
@@ -698,23 +699,6 @@ class BrowserFunc {
             this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH-BCID', `Failed to acquire visual search | ${error instanceof Error ? error.message : String(error)}`);
             return null;
         }
-    }
-    async refreshEarnSnapshot() {
-        const page = this.bot.isMobile ? this.bot.mainMobilePage : this.bot.mainDesktopPage;
-        if (!page || page.isClosed())
-            return null;
-        const fetchPage = async (url) => {
-            try {
-                const res = await page.request.get(url, { timeout: 20000 });
-                return res.ok() ? await res.text() : null;
-            }
-            catch {
-                return null;
-            }
-        };
-        const pages = (await Promise.all([fetchPage(urls_1.URLs.rewards.earn), fetchPage(urls_1.URLs.rewards.dashboard)]))
-            .filter((html) => html !== null);
-        return pages.length ? this.bot.browser.react.snapshotPage(pages) : null;
     }
     resetHttpJars() {
         this.bingJars.clear();

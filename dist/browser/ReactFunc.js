@@ -5,7 +5,7 @@ class ReactFunc {
     constructor(bot) {
         this.bot = bot;
     }
-    // Parse all available data from the provided pages into one snapshot
+    // Parse all avalable data from provided page
     snapshotPage(html) {
         const combined = this.concatFlightChunks(html);
         const offers = this.parseOffers(combined);
@@ -30,36 +30,27 @@ class ReactFunc {
     }
     buildId(html) {
         const combined = this.concatFlightChunks(html);
-        return (html.match(/[?&](?:amp;)?dpl=([A-Za-z0-9._-]+)/i)?.[1] ??
-            combined.match(/[?&](?:amp;)?dpl=([A-Za-z0-9._-]+)/i)?.[1] ??
-            combined.match(/"buildId":"([A-Za-z0-9._-]+)"/)?.[1] ??
-            combined.match(/"b":"([A-Za-z0-9._-]{8,})"/)?.[1] ??
-            html.match(/\/_next\/static\/([A-Za-z0-9._-]+)\//)?.[1] ??
+        return (combined.match(/"buildId":"([A-Za-z0-9_-]{21})"/)?.[1] ??
+            combined.match(/"b":"([A-Za-z0-9_-]{21})"/)?.[1] ??
+            html.match(/\/_next\/static\/([A-Za-z0-9_-]{21})\//)?.[1] ??
             null);
     }
     concatFlightChunks(html) {
         try {
             const pushRe = /self\.__next_f\.push\(\[1,\s*"((?:[^"\\]|\\.)*)"\]\)/g;
-            const pages = typeof html === 'string' ? [html] : html;
             let combined = '';
             let count = 0;
-            for (const page of pages) {
-                let pageChunks = 0;
-                for (const match of page.matchAll(pushRe)) {
-                    try {
-                        // Re-wrap in quotes so JSON.parse decodes
-                        combined += JSON.parse(`"${match[1]}"`);
-                        count++;
-                        pageChunks++;
-                    }
-                    catch (err) {
-                        this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `Skipped undecodable flight chunk | error=${err instanceof Error ? err.message : String(err)}`);
-                    }
+            for (const match of html.matchAll(pushRe)) {
+                try {
+                    // Re-wrap in quotes so JSON.parse decodes
+                    combined += JSON.parse(`"${match[1]}"`);
+                    count++;
                 }
-                if (pageChunks > 0)
-                    combined += '\n';
+                catch (err) {
+                    this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `Skipped undecodable flight chunk | error=${err instanceof Error ? err.message : String(err)}`);
+                }
             }
-            this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `Concatenated flight chunks | pages=${pages.length} | chunks=${count} | length=${combined.length}`);
+            this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `Concatenated flight chunks | chunks=${count} | length=${combined.length}`);
             if (count === 0) {
                 this.bot.logger.warn(this.bot.isMobile, 'REACT-PARSE', 'No __next_f flight chunks found - page may not be an RSC render or markup changed');
             }
@@ -73,64 +64,54 @@ class ReactFunc {
     // Find every object containing "anchor" and return them as parsed JSON
     extractObjects(combined, anchor) {
         const out = [];
-        const anchorKey = anchor.replace(/^"|"$/g, '');
-        let cursor = 0;
+        let i = 0;
         let failures = 0;
-        while (cursor < combined.length) {
-            const anchorIndex = combined.indexOf(anchor, cursor);
-            if (anchorIndex === -1)
-                break;
-            cursor = anchorIndex + anchor.length;
-            let start = combined.lastIndexOf('{', anchorIndex);
-            let extracted = false;
-            while (start !== -1) {
-                let depth = 0;
-                let end = -1;
-                let inStr = false;
-                let esc = false;
-                for (let j = start; j < combined.length; j++) {
-                    const c = combined[j];
-                    if (esc) {
-                        esc = false;
-                        continue;
-                    }
-                    if (inStr && c === '\\') {
-                        esc = true;
-                        continue;
-                    }
-                    if (c === '"') {
-                        inStr = !inStr;
-                        continue;
-                    }
-                    if (inStr)
-                        continue;
-                    if (c === '{')
-                        depth++;
-                    else if (c === '}') {
-                        depth--;
-                        if (depth === 0) {
-                            end = j;
-                            break;
-                        }
-                    }
-                }
-                if (end >= anchorIndex) {
-                    const raw = combined.slice(start, end + 1);
-                    try {
-                        const parsed = JSON.parse(raw.replace(/"\$undefined"/g, 'null'));
-                        if (Object.prototype.hasOwnProperty.call(parsed, anchorKey)) {
-                            out.push(parsed);
-                            cursor = Math.max(cursor, end + 1);
-                            extracted = true;
-                            break;
-                        }
-                    }
-                    catch { }
-                }
-                start = combined.lastIndexOf('{', start - 1);
+        while ((i = combined.indexOf(anchor, i)) !== -1) {
+            const start = combined.lastIndexOf('{', i);
+            if (start === -1) {
+                i += anchor.length;
+                continue;
             }
-            if (!extracted)
+            let depth = 0;
+            let end = -1;
+            let inStr = false;
+            let esc = false;
+            for (let j = start; j < combined.length; j++) {
+                const c = combined[j];
+                if (esc) {
+                    esc = false;
+                    continue;
+                }
+                if (c === '\\') {
+                    esc = true;
+                    continue;
+                }
+                if (c === '"') {
+                    inStr = !inStr;
+                    continue;
+                }
+                if (inStr)
+                    continue;
+                if (c === '{')
+                    depth++;
+                else if (c === '}') {
+                    depth--;
+                    if (depth === 0) {
+                        end = j;
+                        break;
+                    }
+                }
+            }
+            if (end === -1)
+                break;
+            const raw = combined.slice(start, end + 1);
+            i = end;
+            try {
+                out.push(JSON.parse(raw.replace(/"\$undefined"/g, 'null')));
+            }
+            catch {
                 failures++;
+            }
         }
         if (failures > 0) {
             this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `extractObjects("${anchor}") had ${failures} unparseable matches`);
@@ -140,27 +121,21 @@ class ReactFunc {
     // Section parsers
     parseOffers(combined) {
         try {
+            const seen = new Set();
             const today = this.todayStamp();
-            const offers = new Map();
+            const offers = [];
             for (const obj of this.extractObjects(combined, '"offerId"')) {
                 const offerId = obj.offerId;
-                if (!offerId)
+                if (!offerId || seen.has(offerId))
                     continue;
+                seen.add(offerId);
                 const hash = obj.hash ?? null;
                 const isCompleted = (obj.isCompleted ?? obj.complete) === true;
                 const isLocked = obj.isLocked === true;
                 const date = this.normaliseDate(obj.date);
-                const attributes = obj.attributes && typeof obj.attributes === 'object'
-                    ? obj.attributes
-                    : null;
-                const activityTypeValue = obj.activityType ?? obj.activity_type ?? attributes?.activity_type;
-                const parsedActivityType = Number(activityTypeValue);
-                const promotionalValue = obj.isPromotional ?? attributes?.promotional;
-                const isPromotional = promotionalValue === true ||
-                    (typeof promotionalValue === 'string' && promotionalValue.toLowerCase() === 'true');
                 // Never try future-dated offers, lol
                 const reportable = !!hash && !isCompleted && !isLocked && (date === null || date <= today);
-                const candidate = {
+                offers.push({
                     offerId,
                     hash,
                     title: obj.title ?? '',
@@ -169,39 +144,16 @@ class ReactFunc {
                     promotionSubtype: obj.promotionSubtype ?? null,
                     destination: obj.destination ?? obj.destinationUrl ?? '',
                     isCompleted,
-                    isPromotional,
+                    isPromotional: obj.isPromotional === true,
                     isLocked,
                     unlockCriteria: obj.unlockCriteria ?? null,
                     date,
-                    activityType: Number.isInteger(parsedActivityType) && parsedActivityType > 0 ? parsedActivityType : null,
+                    activityType: null, // merge from getuserinfo later???
                     reportable
-                };
-                const existing = offers.get(offerId);
-                if (!existing) {
-                    offers.set(offerId, candidate);
-                    continue;
-                }
-                existing.hash ??= candidate.hash;
-                existing.title ||= candidate.title;
-                existing.description ||= candidate.description;
-                existing.points ||= candidate.points;
-                existing.promotionSubtype ??= candidate.promotionSubtype;
-                existing.destination ||= candidate.destination;
-                existing.isCompleted ||= candidate.isCompleted;
-                existing.isPromotional ||= candidate.isPromotional;
-                existing.isLocked ||= candidate.isLocked;
-                existing.unlockCriteria ??= candidate.unlockCriteria;
-                existing.date ??= candidate.date;
-                existing.activityType ??= candidate.activityType;
-                existing.reportable =
-                    !!existing.hash &&
-                        !existing.isCompleted &&
-                        !existing.isLocked &&
-                        (existing.date === null || existing.date <= today);
+                });
             }
-            const unique = [...offers.values()];
-            this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `Parsed offers | total=${unique.length} | reportable=${unique.filter(o => o.reportable).length}`);
-            return unique;
+            this.bot.logger.debug(this.bot.isMobile, 'REACT-PARSE', `Parsed offers | total=${offers.length} | reportable=${offers.filter(o => o.reportable).length}`);
+            return offers;
         }
         catch (error) {
             this.bot.logger.error(this.bot.isMobile, 'REACT-PARSE', `Failed parsing offers | error=${error instanceof Error ? error.message : String(error)}`);

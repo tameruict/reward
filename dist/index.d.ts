@@ -88,7 +88,6 @@ export declare class MicrosoftRewardsBot {
      * punch cards, or any other point-earning worker.
      */
     checkAccountPoints(account: Account): Promise<PointCheckResult>;
-    private trySavedSessionPointCheck;
     Main(account: Account): Promise<{
         initialPoints: number;
         collectedPoints: number;

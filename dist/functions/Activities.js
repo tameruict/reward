@@ -63,9 +63,9 @@ class Activities {
         const activateSearchPerk = new ActivateSearchPerk_1.ActivateSearchPerk(this.bot);
         await activateSearchPerk.activate(data);
     };
-    doVisualSearch = async (data) => {
+    doVisualSearch = async () => {
         const visualSearch = new VisualSearch_1.VisualSearch(this.bot);
-        return await visualSearch.doVisualSearch(data);
+        return await visualSearch.doVisualSearch();
     };
     // App
     doAppReward = async (promotion) => {

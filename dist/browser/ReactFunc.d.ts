@@ -63,7 +63,7 @@ export interface PageSnapshot {
 export default class ReactFunc {
     private bot;
     constructor(bot: MicrosoftRewardsBot);
-    snapshotPage(html: string | readonly string[]): PageSnapshot;
+    snapshotPage(html: string): PageSnapshot;
     getReportableOffers(html: string): ParsedOffer[];
     getStreakProtection(html: string): StreakProtectionState | null;
     buildId(html: string): string | null;

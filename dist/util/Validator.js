@@ -139,7 +139,7 @@ const defaultConfig = {
     sessionPath: 'sessions',
     headless: true,
     clusters: 0,
-    errorDiagnostics: false,
+    errorDiagnostics: true,
     ensureStreakProtection: true,
     autoClaimPunchcardRewards: false,
     skipNonPointTasks: true,

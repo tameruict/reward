@@ -3,26 +3,20 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.VisualSearch = void 0;
 const Workers_1 = require("../../Workers");
 const VISUAL_SEARCH_ACTIVATION_OFFER = 'visualsearch_streak_activation_v2';
-// 11 is confirmed for the July banner and carried over to the v2 offer, verify before trusting it there
-const VERIFIED_ACTIVITY_TYPES = new Map([
-    ['ww_visualsearch_summerjuly26_activation_banner', 11],
-    ['visualsearch_streak_activation_v2', 11]
-]);
+const VISUAL_SEARCH_ACTIVITY_TYPE = 714;
 const MAX_ATTEMPTS = 3;
-const MAX_SEED_ROLLS = 3;
 class VisualSearch extends Workers_1.Workers {
-    async doVisualSearch(data) {
+    async doVisualSearch() {
         if (this.bot.isMobile) {
             this.bot.logger.debug(this.bot.isMobile, 'VISUAL-SEARCH', 'Skipping on mobile - desktop-only activity');
             return 0;
         }
         const streak = this.findStreak();
-        this.logStreakState(streak);
         if (streak?.isCurrentDayCompleted) {
             this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Already completed today | visualSearchStreak=${streak.completedDays}/${streak.totalDays}`, 'green');
             return 0;
         }
-        const activation = await this.activate(data);
+        const activation = await this.activate();
         const available = !!streak || activation === 'activated' || activation === 'already-active';
         if (!available) {
             this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', 'Visual search not available for this account, skipping');
@@ -30,21 +24,10 @@ class VisualSearch extends Workers_1.Workers {
         }
         return await this.performDailySearch();
     }
-    findStreak(streaks) {
-        const source = streaks ?? this.bot.reactSnapshot?.streaks ?? [];
-        return source.find(s => /visual.?search/i.test(s.partner));
+    findStreak() {
+        return (this.bot.reactSnapshot?.streaks ?? []).find(s => /visual.?search/i.test(s.partner));
     }
-    logStreakState(streak) {
-        if (!streak) {
-            this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', 'No visual-search streak in the snapshot - falling back to the activation offer');
-            return;
-        }
-        this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Streak state | partner="${streak.partner}" | enabled=${streak.isEnabled} | dayCompleted=${streak.isCurrentDayCompleted} | days=${streak.completedDays}/${streak.totalDays} | currentDay=${streak.currentDay} | activities=${streak.activitiesCompleted}/${streak.activitiesTotal}`);
-        if (!streak.isEnabled) {
-            this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', 'Streak is present but not enabled - searches will not register until it is switched on');
-        }
-    }
-    async activate(data) {
+    async activate() {
         const offer = this.findActivationOffer();
         if (!offer) {
             this.bot.logger.debug(this.bot.isMobile, 'VISUAL-SEARCH', 'No visual-search activation offer present on the dashboard');
@@ -63,20 +46,14 @@ class VisualSearch extends Workers_1.Workers {
             this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', 'Skipping activation: "reportActivity" action id not discovered in bundle');
             return 'failed';
         }
-        const dashboard = await this.resolveDashboard(data);
-        const metadata = this.resolveActivationMetadata(offer, dashboard);
-        if (!metadata) {
-            this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Skipping activation: no valid activity type found | offerId=${offer.offerId}`);
-            return 'failed';
-        }
-        this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Activating visual search | offerId=${offer.offerId} | activityType=${metadata.activityType} | activityTypeSource=${metadata.activityTypeSource} | promotional=${metadata.isPromotional} | geo=${this.bot.userData.geoLocale}`);
+        this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Activating visual search | offerId=${offer.offerId} | geo=${this.bot.userData.geoLocale}`);
         try {
             const { status, acknowledged } = await this.bot.browser.func.reportServerAction(actionId, [
                 offer.hash,
-                metadata.activityType,
+                VISUAL_SEARCH_ACTIVITY_TYPE,
                 {
                     offerid: offer.offerId,
-                    isPromotional: metadata.isPromotional ? 'true' : '$undefined',
+                    isPromotional: '$undefined',
                     timezoneOffset: this.bot.userData.timezoneOffset
                 }
             ]);
@@ -93,86 +70,6 @@ class VisualSearch extends Workers_1.Workers {
             return 'failed';
         }
     }
-    async resolveDashboard(fallback) {
-        try {
-            return await this.bot.browser.func.getDashboardData(this.bot.cookies.desktop);
-        }
-        catch {
-            this.bot.logger.debug(this.bot.isMobile, 'VISUAL-SEARCH', 'Desktop dashboard fetch failed - falling back to the dashboard from the mobile pass');
-            return fallback;
-        }
-    }
-    resolveActivationMetadata(offer, data) {
-        const dashboardPromotion = this.findDashboardPromotion(data.dashboard, offer.offerId);
-        if (offer.activityType !== null) {
-            return {
-                activityType: offer.activityType,
-                activityTypeSource: 'react',
-                isPromotional: offer.isPromotional || this.dashboardPromotionIsPromotional(dashboardPromotion)
-            };
-        }
-        const dashboardActivityType = this.dashboardPromotionActivityType(dashboardPromotion);
-        if (dashboardActivityType !== null) {
-            return {
-                activityType: dashboardActivityType,
-                activityTypeSource: 'dashboard',
-                isPromotional: offer.isPromotional || this.dashboardPromotionIsPromotional(dashboardPromotion)
-            };
-        }
-        const verifiedFallback = VERIFIED_ACTIVITY_TYPES.get(offer.offerId.toLowerCase());
-        if (verifiedFallback !== undefined) {
-            return {
-                activityType: verifiedFallback,
-                activityTypeSource: 'verified-fallback',
-                isPromotional: offer.isPromotional || this.dashboardPromotionIsPromotional(dashboardPromotion)
-            };
-        }
-        return null;
-    }
-    findDashboardPromotion(root, offerId) {
-        const target = offerId.toLowerCase();
-        const pending = [root];
-        const visited = new Set();
-        while (pending.length) {
-            const value = pending.pop();
-            if (!value || typeof value !== 'object' || visited.has(value))
-                continue;
-            visited.add(value);
-            if (Array.isArray(value)) {
-                for (const entry of value)
-                    pending.push(entry);
-                continue;
-            }
-            const record = value;
-            const attributes = this.asRecord(record.attributes);
-            const candidateId = record.offerId ?? record.offerid ?? attributes?.offerid;
-            if (typeof candidateId === 'string' && candidateId.toLowerCase() === target)
-                return record;
-            for (const entry of Object.values(record))
-                pending.push(entry);
-        }
-        return null;
-    }
-    dashboardPromotionActivityType(promotion) {
-        if (!promotion)
-            return null;
-        const attributes = this.asRecord(promotion.attributes);
-        return this.parseActivityType(promotion.activityType ?? promotion.activity_type ?? attributes?.activityType ?? attributes?.activity_type);
-    }
-    dashboardPromotionIsPromotional(promotion) {
-        if (!promotion)
-            return false;
-        const attributes = this.asRecord(promotion.attributes);
-        const value = promotion.isPromotional ?? promotion.promotional ?? attributes?.promotional;
-        return value === true || (typeof value === 'string' && value.toLowerCase() === 'true');
-    }
-    parseActivityType(value) {
-        const parsed = Number(value);
-        return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-    }
-    asRecord(value) {
-        return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-    }
     findActivationOffer() {
         const offers = this.bot.reactSnapshot?.offers ?? [];
         const exact = offers.find(o => o.offerId === VISUAL_SEARCH_ACTIVATION_OFFER);
@@ -184,10 +81,10 @@ class VisualSearch extends Workers_1.Workers {
         }) ?? null);
     }
     async performDailySearch() {
-        const seenBcids = new Set();
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            const visual = await this.acquireFreshVisualSearch(seenBcids, attempt);
+            const visual = await this.bot.browser.func.acquireVisualSearch();
             if (!visual) {
+                this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Could not obtain a visual search (attempt ${attempt}/${MAX_ATTEMPTS})`);
                 await this.bot.utils.wait(this.bot.utils.randomDelay(3000, 6000));
                 continue;
             }
@@ -200,50 +97,15 @@ class VisualSearch extends Workers_1.Workers {
                 this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Daily visual search done | pointsGained=${gained} | currentBalance=${res.balance} | query="${visual.query}"`, 'green');
                 return gained;
             }
-            if (await this.dayRegistered()) {
-                this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Daily visual search registered | pointsGained=0 (streak pays out on milestones) | query="${visual.query}"`, 'green');
+            if (res.ig) {
+                this.bot.logger.info(this.bot.isMobile, 'VISUAL-SEARCH', `Visual search reported, no new points | "${visual.query}" | likely already completed today`, 'green');
                 return 0;
             }
-            if (res.ig) {
-                this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Visual search was reported but not credited (attempt ${attempt}/${MAX_ATTEMPTS}) | query="${visual.query}"`);
-            }
-            else {
-                this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `No reportActivity acknowledgement (attempt ${attempt}/${MAX_ATTEMPTS}) | query="${visual.query}"`);
-            }
+            this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `No IG on report (attempt ${attempt}/${MAX_ATTEMPTS}) - retrying with a fresh image`);
             await this.bot.utils.wait(this.bot.utils.randomDelay(3000, 6000));
         }
         this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Daily visual search did not credit after ${MAX_ATTEMPTS} attempts`);
         return 0;
-    }
-    // bcid is derived from the image bytes, so a repeated seed produces a blob bing already credited
-    async acquireFreshVisualSearch(seen, attempt) {
-        for (let roll = 1; roll <= MAX_SEED_ROLLS; roll++) {
-            const visual = await this.bot.browser.func.acquireVisualSearch();
-            if (!visual) {
-                this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Could not obtain a visual search (attempt ${attempt}/${MAX_ATTEMPTS})`);
-                return null;
-            }
-            if (!seen.has(visual.bcid)) {
-                seen.add(visual.bcid);
-                return visual;
-            }
-            this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Seed produced an already-used bcid=${visual.bcid.slice(0, 14)} - re-rolling (${roll}/${MAX_SEED_ROLLS})`);
-            await this.bot.utils.wait(this.bot.utils.randomDelay(1000, 2000));
-        }
-        this.bot.logger.warn(this.bot.isMobile, 'VISUAL-SEARCH', `Seed rotation is not varying the bcid (attempt ${attempt}/${MAX_ATTEMPTS}) - check the image source`);
-        return null;
-    }
-    async dayRegistered() {
-        const snapshot = await this.bot.browser.func.refreshEarnSnapshot();
-        if (!snapshot)
-            return false;
-        const streak = this.findStreak(snapshot.streaks);
-        if (!streak)
-            return false;
-        if (streak.isCurrentDayCompleted)
-            return true;
-        this.bot.logger.debug(this.bot.isMobile, 'VISUAL-SEARCH', `Streak still open after reporting | days=${streak.completedDays}/${streak.totalDays} | activities=${streak.activitiesCompleted}/${streak.activitiesTotal}`);
-        return false;
     }
 }
 exports.VisualSearch = VisualSearch;

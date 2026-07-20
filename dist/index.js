@@ -351,12 +351,6 @@ class MicrosoftRewardsBot {
         try {
             return await executionContext.run({ isMobile: true, account }, async () => {
                 this.http = new Http_1.default(account.proxy);
-                // A valid saved Rewards session can read the balance directly from
-                // the user-info API. This avoids launching Chromium and running the
-                // full login/bootstrap flow for the common case.
-                const fastResult = await this.trySavedSessionPointCheck(account);
-                if (fastResult)
-                    return fastResult;
                 if (this.http.usesProxy) {
                     await this.http.assertProxyReady(true);
                 }
@@ -385,45 +379,6 @@ class MicrosoftRewardsBot {
                     await this.browser.func.closeBrowser(session.context, accountEmail, authenticated);
                 });
             }
-        }
-    }
-    async trySavedSessionPointCheck(account) {
-        let savedSession;
-        try {
-            savedSession = (0, SessionStore_1.loadSession)(this.config.sessionPath, account.email, true);
-        }
-        catch (error) {
-            this.logger.warn(this.isMobile, 'FAST-POINT-CHECK', `Saved session could not be loaded; falling back to browser login | error=${error instanceof Error ? error.message : String(error)}`);
-            return null;
-        }
-        const cookies = savedSession?.storageState?.cookies ?? [];
-        if (!cookies.length || !savedSession?.fingerprint)
-            return null;
-        this.fingerprintMobile = savedSession.fingerprint;
-        this.cookies.mobile = cookies;
-        try {
-            const data = await this.browser.func.getDashboardData(cookies);
-            const status = data.dashboard.userStatus;
-            const result = {
-                accountId: account.accountId ?? null,
-                email: account.email,
-                points: status.availablePoints,
-                lifetimePoints: status.lifetimePoints ?? null,
-                lifetimePointsRedeemed: status.lifetimePointsRedeemed ?? null,
-                country: data.dashboard.userProfile.attributes.country ?? null,
-                checkedAt: new Date().toISOString()
-            };
-            this.logger.info(this.isMobile, 'FAST-POINT-CHECK', `Read balance through saved session | points=${result.points}`);
-            return result;
-        }
-        catch (error) {
-            const requestError = error;
-            const status = requestError.status ?? requestError.response?.status;
-            if (status === 401 || status === 403) {
-                this.logger.info(this.isMobile, 'FAST-POINT-CHECK', 'Saved session expired; falling back to browser login');
-                return null;
-            }
-            throw error;
         }
     }
     async Main(account) {
@@ -497,7 +452,7 @@ class MicrosoftRewardsBot {
                             desktopSession = await this.createDesktopSession(account);
                             await this.punchcardManager.runDesktop();
                             if (doVisualSearch)
-                                await this.activities.doVisualSearch(data);
+                                await this.activities.doVisualSearch();
                         });
                         await executionContext.run({ isMobile: false, account }, async () => {
                             await this.browser.func.closeBrowser(desktopSession.context, accountEmail);
@@ -549,7 +504,7 @@ class MicrosoftRewardsBot {
                                 desktopSession = await this.createDesktopSession(account);
                                 await this.punchcardManager.runDesktop();
                                 if (doVisualSearch)
-                                    await this.activities.doVisualSearch(data);
+                                    await this.activities.doVisualSearch();
                             });
                         }
                         ;
@@ -593,7 +548,7 @@ class MicrosoftRewardsBot {
                                 desktopSession = await this.createDesktopSession(account);
                                 await this.punchcardManager.runDesktop();
                                 if (doVisualSearch)
-                                    await this.activities.doVisualSearch(data);
+                                    await this.activities.doVisualSearch();
                                 if (doDesktopSearch && !apiSearch) {
                                     desktopPoints = await this.searchManager.searchDesktop(account);
                                 }

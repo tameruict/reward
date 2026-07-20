@@ -112,7 +112,19 @@ class Logger {
             }
         }
         else {
-            process.send?.({ __ipcLog: { content: cleanMsg, level } });
+            // The primary process can close the IPC channel while workers are
+            // still finishing their shutdown handlers. Logging must not crash
+            // a worker in that window with an EPIPE error.
+            if (process.send && process.connected !== false) {
+                try {
+                    process.send({ __ipcLog: { content: cleanMsg, level } }, () => undefined);
+                }
+                catch (error) {
+                    if (error.code !== 'EPIPE') {
+                        throw error;
+                    }
+                }
+            }
         }
     }
     shouldPassFilter(filter, level, message) {
