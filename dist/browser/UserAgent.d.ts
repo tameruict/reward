@@ -1,0 +1,45 @@
+import type { BrowserFingerprintWithHeaders } from 'fingerprint-generator';
+import type { MicrosoftRewardsBot } from '../index';
+export declare class UserAgentManager {
+    private bot;
+    private static readonly NOT_A_BRAND_VERSION;
+    private static readonly MOBILE_MODELS;
+    constructor(bot: MicrosoftRewardsBot);
+    private static pickMobileModel;
+    getUserAgent(isMobile: boolean): Promise<{
+        userAgent: string;
+        userAgentMetadata: {
+            isMobile: boolean;
+            platform: string;
+            fullVersionList: {
+                brand: string;
+                version: string;
+            }[];
+            brands: {
+                brand: string;
+                version: string;
+            }[];
+            platformVersion: string;
+            architecture: string;
+            bitness: string;
+            model: string;
+        };
+    }>;
+    getChromeVersion(isMobile: boolean): Promise<string>;
+    getEdgeVersions(isMobile: boolean): Promise<{
+        android: string | undefined;
+        windows: string | undefined;
+    }>;
+    getSystemComponents(mobile: boolean, androidVersion?: number): string;
+    getAppComponents(isMobile: boolean): Promise<{
+        not_a_brand_version: string;
+        not_a_brand_major_version: string;
+        edge_version: string;
+        edge_major_version: string;
+        chrome_version: string;
+        chrome_major_version: string;
+        chrome_reduced_version: string;
+    }>;
+    updateFingerprintUserAgent(fingerprint: BrowserFingerprintWithHeaders, isMobile: boolean): Promise<BrowserFingerprintWithHeaders>;
+}
+//# sourceMappingURL=UserAgent.d.ts.map

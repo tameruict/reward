@@ -1,0 +1,1 @@
+{"version":3,"file":"AccountDatabase.d.ts","sourceRoot":"","sources":["../../src/util/AccountDatabase.ts"],"names":[],"mappings":"AAIA,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,sBAAsB,CAAA;AA6BnD,wBAAgB,qBAAqB,CAAC,WAAW,EAAE,MAAM,GAAG,MAAM,CAGjE;AAED,wBAAgB,sBAAsB,CAAC,MAAM,EAAE,MAAM,GAAG,IAAI,CAwE3D;AAED,wBAAgB,wBAAwB,CAAC,WAAW,EAAE,MAAM,GAAG,OAAO,EAAE,GAAG,IAAI,CAkE9E"}
