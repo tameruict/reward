@@ -12,6 +12,7 @@
         "install:browser": "npx patchright install chromium",
         "build": "rimraf dist && tsc && node ./scripts/main/copyAssets.js",
         "start": "node --no-warnings ./dist/index.js",
+        "points-checker": "npm run build && npm --prefix points-checker start",
         "ts-start": "ts-node ./src/index.ts",
         "dev": "ts-node ./src/index.ts -dev",
         "api": "node ./scripts/api/server.js",

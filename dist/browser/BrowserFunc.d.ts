@@ -11,9 +11,10 @@ export default class BrowserFunc {
     private bot;
     private bingJars;
     constructor(bot: MicrosoftRewardsBot);
-    getDashboardData(cookies?: Cookie[]): Promise<DashboardData>;
+    getDashboardData(cookies?: Cookie[], page?: Page): Promise<DashboardData>;
+    private getDashboardDataFromBrowser;
     getAppDashboardData(): Promise<AppDashboardData>;
-    getSearchPoints(): Promise<Counters>;
+    getSearchPoints(page?: Page): Promise<Counters>;
     missingSearchPoints(counters: Counters, isMobile: boolean): MissingSearchPoints;
     getBrowserEarnablePoints(): Promise<BrowserEarnablePoints>;
     getAppEarnablePoints(): Promise<AppEarnablePoints>;

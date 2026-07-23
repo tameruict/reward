@@ -9,16 +9,19 @@ const SearchBonus_1 = require("../SearchBonus");
 const REFRESH_EVERY = 10;
 const MAX_QUERY_ATTEMPTS = 5;
 const MAX_MEASUREMENT_FAILURES = 3;
+const BING_NAVIGATION_TIMEOUT = 20000;
+const BING_DOM_READY_TIMEOUT = 8000;
+const RESULT_READY_TIMEOUT = 8000;
 const POINTS_MAX_SEARCHES = 100;
 const POINTS_STAGNANT_LIMIT = 10;
 const SEARCH_BOX_SELECTORS = ['#sb_form_q', 'textarea[name="q"]', 'input[name="q"]'];
-const RESULT_LINK = '#b_results .b_algo h2';
+const RESULT_LINK_SELECTORS = ['#b_results .b_algo h2 a', '#b_results .b_algo a[href]', 'main .b_algo h2 a'];
 class Search extends Workers_1.Workers {
     searchCount = 0;
     async doSearch(page, isMobile) {
         const startBalance = Number(this.bot.userData.currentPoints ?? 0);
         this.bot.logger.info(isMobile, 'SEARCH-BING', `Starting Bing searches | currentBalance=${startBalance}`);
-        const tracker = new PointsTracker(this.bot, isMobile);
+        const tracker = new PointsTracker(this.bot, isMobile, page);
         try {
             const stats = await this.runSearchSession(page, isMobile, tracker);
             if (stats.performed >= tracker.maxSearches && !tracker.done()) {
@@ -28,12 +31,12 @@ class Search extends Workers_1.Workers {
             return stats.totalGained;
         }
         finally {
-            await page.goto(urls_1.URLs.bing.origin).catch(() => { });
+            await this.navigateToBing(page, urls_1.URLs.bing.origin, isMobile).catch(() => { });
         }
     }
     async doBonusSearches(page) {
         const isMobile = this.bot.isMobile;
-        const tracker = new SearchBonus_1.BonusTracker(this.bot, isMobile);
+        const tracker = new SearchBonus_1.BonusTracker(this.bot, isMobile, page);
         const stats = await this.runSearchSession(page, isMobile, tracker);
         // No active offer (or the feature is off): prepare() already logged why
         if (!tracker.started)
@@ -65,9 +68,7 @@ class Search extends Workers_1.Workers {
                 return stats;
             }
             this.bot.logger.info(isMobile, tracker.context, `Query pool ready | count=${queries.length}`);
-            await page.goto(urls_1.URLs.bing.origin);
-            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => { });
-            await this.bot.browser.utils.tryDismissAllMessages(page);
+            await this.navigateToBing(page, urls_1.URLs.bing.origin, isMobile);
             let index = 0;
             while (!tracker.done() && stats.performed < tracker.maxSearches && stats.stagnant < tracker.stagnantLimit) {
                 // Out of queries: pull a fresh batch, dedupe, and reshuffle
@@ -127,9 +128,7 @@ class Search extends Workers_1.Workers {
     async bingSearch(page, query, isMobile) {
         this.searchCount++;
         if (this.searchCount % REFRESH_EVERY === 0) {
-            await page.goto(urls_1.URLs.bing.origin);
-            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => { });
-            await this.bot.browser.utils.tryDismissAllMessages(page);
+            await this.navigateToBing(page, urls_1.URLs.bing.origin, isMobile);
         }
         let lastError;
         for (let attempt = 1; attempt <= MAX_QUERY_ATTEMPTS; attempt++) {
@@ -143,7 +142,8 @@ class Search extends Workers_1.Workers {
                 await searchBox.fill('');
                 await page.keyboard.type(query, { delay: this.bot.utils.randomDelay(45, 90) });
                 await page.keyboard.press('Enter');
-                await this.bot.utils.wait(3000);
+                await page.waitForLoadState('domcontentloaded', { timeout: BING_DOM_READY_TIMEOUT }).catch(() => { });
+                await this.bot.utils.wait(1500);
                 if (this.bot.config.searchSettings.scrollRandomResults) {
                     await this.bot.utils.wait(2000);
                     await this.randomScroll(page, isMobile);
@@ -179,9 +179,7 @@ class Search extends Workers_1.Workers {
         if (recovered)
             return recovered;
         const cvid = (0, crypto_1.randomBytes)(16).toString('hex');
-        await page.goto(urls_1.URLs.bing.search(query, cvid));
-        await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => { });
-        await this.bot.browser.utils.tryDismissAllMessages(page);
+        await this.navigateToBing(page, urls_1.URLs.bing.search(query, cvid), isMobile);
         const afterDirectSearch = await this.visibleSearchBox(page, 5000);
         if (afterDirectSearch)
             return afterDirectSearch;
@@ -203,9 +201,7 @@ class Search extends Workers_1.Workers {
         await this.bot.browser.utils.tryDismissAllMessages(page);
         if (await this.visibleSearchBox(page).catch(() => null))
             return;
-        await page.goto(urls_1.URLs.bing.origin);
-        await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => { });
-        await this.bot.browser.utils.tryDismissAllMessages(page);
+        await this.navigateToBing(page, urls_1.URLs.bing.origin, isMobile);
         if (before !== page.url()) {
             this.bot.logger.debug(isMobile, 'SEARCH-BING', `Recovered search page | from=${before} | to=${page.url()}`);
         }
@@ -223,11 +219,18 @@ class Search extends Workers_1.Workers {
     }
     async clickRandomLink(page, isMobile) {
         try {
+            const resultSelector = await this.visibleResultLink(page, RESULT_READY_TIMEOUT);
+            if (!resultSelector) {
+                this.bot.logger.debug(isMobile, 'SEARCH-RANDOM-CLICK', `No visible organic result; skipping click | url=${page.url()}`);
+                return;
+            }
             const searchPageUrl = page.url();
-            await this.bot.browser.utils.ghostClick(page, RESULT_LINK);
+            const clicked = await this.bot.browser.utils.ghostClick(page, resultSelector);
+            if (!clicked)
+                return;
             await this.bot.utils.wait(this.bot.config.searchSettings.searchResultVisitTime);
             if (isMobile) {
-                await page.goto(searchPageUrl);
+                await this.navigateToBing(page, searchPageUrl, isMobile);
             }
             else {
                 const newTab = await this.bot.browser.utils.getLatestTab(page);
@@ -238,23 +241,55 @@ class Search extends Workers_1.Workers {
             this.bot.logger.error(isMobile, 'SEARCH-RANDOM-CLICK', `Failed during random click | ${error instanceof Error ? error.message : String(error)}`);
         }
     }
+    async visibleResultLink(page, timeout) {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            for (const selector of RESULT_LINK_SELECTORS) {
+                const visible = await page
+                    .locator(selector)
+                    .first()
+                    .isVisible({ timeout: Math.min(500, Math.max(1, deadline - Date.now())) })
+                    .catch(() => false);
+                if (visible)
+                    return selector;
+            }
+            await this.bot.utils.wait(250);
+        }
+        return null;
+    }
+    async navigateToBing(page, url, isMobile) {
+        await page.goto(url, {
+            waitUntil: 'commit',
+            timeout: BING_NAVIGATION_TIMEOUT
+        });
+        const domReady = await page
+            .waitForLoadState('domcontentloaded', { timeout: BING_DOM_READY_TIMEOUT })
+            .then(() => true)
+            .catch(() => false);
+        if (!domReady) {
+            this.bot.logger.debug(isMobile, 'SEARCH-BING', `DOMContentLoaded not observed; continuing after committed navigation | url=${page.url()}`);
+        }
+        await this.bot.browser.utils.tryDismissAllMessages(page);
+    }
 }
 exports.Search = Search;
 class PointsTracker {
     bot;
     isMobile;
+    page;
     context = 'SEARCH-BING';
     maxSearches = POINTS_MAX_SEARCHES;
     stagnantLimit = POINTS_STAGNANT_LIMIT;
     missing = { mobilePoints: 0, desktopPoints: 0, edgePoints: 0, totalPoints: 0 };
     runOnZeroPoints;
-    constructor(bot, isMobile) {
+    constructor(bot, isMobile, page) {
         this.bot = bot;
         this.isMobile = isMobile;
+        this.page = page;
         this.runOnZeroPoints = this.bot.config.searchSettings.runOnZeroPoints ?? false;
     }
     async prepare() {
-        this.missing = this.bot.browser.func.missingSearchPoints(await this.bot.browser.func.getSearchPoints(), this.isMobile);
+        this.missing = this.bot.browser.func.missingSearchPoints(await this.bot.browser.func.getSearchPoints(this.page), this.isMobile);
         this.bot.logger.info(this.isMobile, this.context, `Search points remaining | edge=${this.missing.edgePoints} | desktop=${this.missing.desktopPoints} | mobile=${this.missing.mobilePoints}`);
         if (this.missing.totalPoints <= 0) {
             if (!this.runOnZeroPoints) {
@@ -266,7 +301,7 @@ class PointsTracker {
         return true;
     }
     async measure() {
-        const updated = this.bot.browser.func.missingSearchPoints(await this.bot.browser.func.getSearchPoints(), this.isMobile);
+        const updated = this.bot.browser.func.missingSearchPoints(await this.bot.browser.func.getSearchPoints(this.page), this.isMobile);
         const gained = Math.max(0, this.missing.totalPoints - updated.totalPoints);
         this.missing = updated;
         if (gained > 0) {

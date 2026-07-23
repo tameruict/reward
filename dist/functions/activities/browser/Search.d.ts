@@ -12,5 +12,7 @@ export declare class Search extends Workers {
     private recoverSearchPage;
     private randomScroll;
     private clickRandomLink;
+    private visibleResultLink;
+    private navigateToBing;
 }
 //# sourceMappingURL=Search.d.ts.map

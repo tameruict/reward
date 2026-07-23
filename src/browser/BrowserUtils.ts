@@ -4,6 +4,8 @@ import { ClickOptions, createCursor } from 'ghost-cursor-playwright-port'
 
 import type { MicrosoftRewardsBot } from '../index'
 
+const BAD_PAGE_RELOAD_TIMEOUT = 20000
+
 export default class BrowserUtils {
     private bot: MicrosoftRewardsBot
     private readonly suspendedAccountNotified = new Set<string>()
@@ -167,11 +169,8 @@ export default class BrowserUtils {
 
             if (isBadPage) {
                 this.bot.logger.info(this.bot.isMobile, 'RELOAD-BAD-PAGE', 'Bad page detected, reloading!')
-                try {
-                    await page.reload({ waitUntil: 'load' })
-                } catch {
-                    await page.reload().catch(() => {})
-                }
+                await page.reload({ waitUntil: 'commit', timeout: BAD_PAGE_RELOAD_TIMEOUT })
+                await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {})
                 return true
             } else {
                 return false
@@ -263,8 +262,14 @@ export default class BrowserUtils {
                 `Trying to click selector: ${selector}, options: ${JSON.stringify(options)}`
             )
 
-            // Wait for selector to exist before clicking
-            await page.waitForSelector(selector, { timeout: 1000 }).catch(() => {})
+            // Do not hand a missing target to ghost-cursor. Besides producing a
+            // misleading warning, ghost-cursor waits again using the page's much
+            // longer default timeout.
+            const target = await page.waitForSelector(selector, { state: 'visible', timeout: 1500 }).catch(() => null)
+            if (!target) {
+                this.bot.logger.debug(this.bot.isMobile, 'GHOST-CLICK', `Skipped missing selector: ${selector}`)
+                return false
+            }
 
             // ghost-cursor expects its own Playwright Page type from a different
             // eslint-disable-next-line @typescript-eslint/no-explicit-any

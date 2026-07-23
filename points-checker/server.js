@@ -153,7 +153,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`[points-checker] Listening on http://${HOST}:${PORT}`);
   console.log(`[points-checker] Database: ${database.dbPath}`);
-  console.log(`[points-checker] Max concurrency: ${queue.maxConcurrency}`);
+  console.log(`[points-checker] Max concurrency: ${queue.maxConcurrency ?? "auto (one worker per proxy route)"}`);
 });
 
 function shutdown(signal) {

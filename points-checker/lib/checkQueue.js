@@ -15,7 +15,10 @@ class CheckQueue {
   constructor(database, eventHub) {
     this.database = database;
     this.eventHub = eventHub;
-    this.maxConcurrency = Math.min(Math.max(Number(process.env.MAX_CONCURRENCY) || 3, 1), 12);
+    const configuredConcurrency = String(process.env.MAX_CONCURRENCY || "auto").trim().toLowerCase();
+    this.maxConcurrency = configuredConcurrency === "auto" || configuredConcurrency === ""
+      ? null
+      : Math.min(Math.max(Number(configuredConcurrency) || 1, 1), 100);
     this.timeoutMs = Math.min(Math.max(Number(process.env.CHECK_TIMEOUT_MS) || 180000, 30000), 900000);
     this.activeRun = null;
   }
@@ -30,12 +33,15 @@ class CheckQueue {
     }
 
     const run = this.database.createRun(accounts, source);
+    const proxyRoutes = new Set(accounts.map(account => account.lockKey)).size;
     this.activeRun = {
       id: run.id,
       pending: [...accounts],
       active: new Map(),
       locks: new Set(),
       stopping: false,
+      proxyRoutes,
+      maxConcurrency: Math.max(1, Math.min(proxyRoutes, this.maxConcurrency ?? proxyRoutes)),
     };
     this.database.markRunStarted(run.id);
     this.eventHub.emit("run", { action: "started", run: this.database.getRun(run.id) });
@@ -59,7 +65,7 @@ class CheckQueue {
     const state = this.activeRun;
     if (!state) return;
 
-    while (!state.stopping && state.active.size < this.maxConcurrency && state.pending.length) {
+    while (!state.stopping && state.active.size < state.maxConcurrency && state.pending.length) {
       const index = state.pending.findIndex(account => !state.locks.has(account.lockKey));
       if (index === -1) break;
       const [account] = state.pending.splice(index, 1);
@@ -176,6 +182,8 @@ class CheckQueue {
       id: this.activeRun.id,
       pending: this.activeRun.pending.length,
       active: this.activeRun.active.size,
+      proxyRoutes: this.activeRun.proxyRoutes,
+      maxConcurrency: this.activeRun.maxConcurrency,
       stopping: this.activeRun.stopping,
     };
   }

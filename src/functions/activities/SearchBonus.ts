@@ -1,6 +1,7 @@
 import type { Dashboard } from '../../interface/DashboardData'
 import type { SearchTracker } from '../../interface/Search'
 import type { MicrosoftRewardsBot } from '../../index'
+import type { Page } from 'patchright'
 
 const BONUS_STAGNANT_LIMIT = 20
 
@@ -22,7 +23,8 @@ export class BonusTracker implements SearchTracker {
 
     constructor(
         private bot: MicrosoftRewardsBot,
-        private isMobile: boolean
+        private isMobile: boolean,
+        private page?: Page
     ) {
         this.maxSearches = Math.max(0, Number(this.bot.config.searchSettings.maxBonusSearches ?? 0))
     }
@@ -35,7 +37,7 @@ export class BonusTracker implements SearchTracker {
 
         let dashboard: Dashboard
         try {
-            dashboard = (await this.bot.browser.func.getDashboardData()).dashboard
+            dashboard = (await this.bot.browser.func.getDashboardData(undefined, this.page)).dashboard
         } catch (error) {
             this.bot.logger.warn(
                 this.isMobile,
@@ -68,7 +70,7 @@ export class BonusTracker implements SearchTracker {
     async measure(): Promise<number> {
         let dash: Dashboard
         try {
-            dash = (await this.bot.browser.func.getDashboardData()).dashboard
+            dash = (await this.bot.browser.func.getDashboardData(undefined, this.page)).dashboard
         } catch {
             return 0
         }

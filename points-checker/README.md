@@ -16,6 +16,8 @@ npm start
 
 Open <http://127.0.0.1:8891>.
 
+By default, each active proxy route gets one concurrent check worker. Accounts sharing the same proxy are still checked sequentially. Set `MAX_CONCURRENCY` to a number to cap the number of workers, or leave it as `auto` for full proxy-based concurrency.
+
 The default database path is `../data/accounts.db`. Keep `ACCOUNTS_DB_KEY` identical to the value used by the parent bot when database credentials are encrypted.
 
 ## Safety model

@@ -4,6 +4,7 @@ exports.RewardsAuthenticationRequiredError = void 0;
 const crypto_1 = require("crypto");
 const urls_1 = require("../constants/urls");
 const userAgents_1 = require("../constants/userAgents");
+const Http_1 = require("../util/Http");
 const SessionStore_1 = require("../util/SessionStore");
 const Utils_1 = require("../util/Utils");
 // Bing-hosted image used to seed the daily visual search. /images/kblob fetches it (Can be changed)
@@ -76,23 +77,23 @@ class BrowserFunc {
     constructor(bot) {
         this.bot = bot;
     }
-    async getDashboardData(cookies) {
+    async getDashboardData(cookies, page) {
+        const request = {
+            url: urls_1.URLs.rewards.userInfoApi,
+            method: 'GET',
+            timeout: Math.max(20000, this.bot.utils.stringToNumber(this.bot.config.globalTimeout)),
+            headers: {
+                ...(this.bot.fingerprint?.headers ?? {}),
+                Cookie: this.buildCookieHeader(cookies ?? this.bot.cookies.mobile, [
+                    'bing.com',
+                    'live.com',
+                    'microsoftonline.com'
+                ]),
+                Referer: urls_1.URLs.rewards.referer,
+                Origin: urls_1.URLs.rewards.origin
+            }
+        };
         try {
-            const request = {
-                url: urls_1.URLs.rewards.userInfoApi,
-                method: 'GET',
-                timeout: Math.max(20000, this.bot.utils.stringToNumber(this.bot.config.globalTimeout)),
-                headers: {
-                    ...(this.bot.fingerprint?.headers ?? {}),
-                    Cookie: this.buildCookieHeader(cookies ?? this.bot.cookies.mobile, [
-                        'bing.com',
-                        'live.com',
-                        'microsoftonline.com'
-                    ]),
-                    Referer: urls_1.URLs.rewards.referer,
-                    Origin: urls_1.URLs.rewards.origin
-                }
-            };
             const response = await this.bot.http.request(request);
             if (response.data) {
                 return response.data;
@@ -100,9 +101,41 @@ class BrowserFunc {
             throw new Error('Dashboard data missing from API response');
         }
         catch (error) {
+            // The browser context is already bound to the account's configured
+            // proxy. If Impit's separate proxy transport is temporarily stuck,
+            // reuse that authenticated/proxied context instead of falling back
+            // to a direct connection or failing a search-progress measurement.
+            if (error instanceof Http_1.ProxyUnavailableError && page && !page.isClosed()) {
+                try {
+                    const data = await this.getDashboardDataFromBrowser(page, request);
+                    this.bot.logger.warn(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Primary proxy transport unavailable; recovered through browser-context proxy transport');
+                    return data;
+                }
+                catch (fallbackError) {
+                    this.bot.logger.error(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Failed to get dashboard data: ${error.message} | browser-context fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+                    throw fallbackError;
+                }
+            }
             this.bot.logger.error(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Failed to get dashboard data: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
+    }
+    async getDashboardDataFromBrowser(page, request) {
+        const headers = Object.fromEntries(Object.entries(request.headers ?? {})
+            .filter((entry) => entry[1] !== undefined && entry[1] !== null)
+            .map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : String(value)]));
+        const response = await page.request.get(request.url ?? urls_1.URLs.rewards.userInfoApi, {
+            headers,
+            timeout: request.timeout
+        });
+        if (!response.ok()) {
+            throw new Error(`Browser-context dashboard request returned HTTP ${response.status()}`);
+        }
+        const data = await response.json();
+        if (!data || typeof data !== 'object' || !('dashboard' in data)) {
+            throw new Error('Dashboard data missing from browser-context response');
+        }
+        return data;
     }
     async getAppDashboardData() {
         try {
@@ -122,8 +155,8 @@ class BrowserFunc {
             throw error;
         }
     }
-    async getSearchPoints() {
-        const dashboardData = await this.getDashboardData(); // Always fetch newest data
+    async getSearchPoints(page) {
+        const dashboardData = await this.getDashboardData(undefined, page); // Always fetch newest data
         return dashboardData.dashboard.userStatus.counters;
     }
     missingSearchPoints(counters, isMobile) {

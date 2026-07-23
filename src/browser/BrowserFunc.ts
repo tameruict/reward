@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto'
 import { URLs } from '../constants/urls'
 import { BING_APP_USER_AGENT } from '../constants/userAgents'
 import type { BrowserContext, Cookie, Page } from 'patchright'
-import type { HttpRequestConfig } from '../util/Http'
+import { ProxyUnavailableError, type HttpRequestConfig } from '../util/Http'
 
 import type { MicrosoftRewardsBot } from '../index'
 import { saveStorageState } from '../util/SessionStore'
@@ -92,24 +92,24 @@ export default class BrowserFunc {
         this.bot = bot
     }
 
-    async getDashboardData(cookies?: Cookie[]): Promise<DashboardData> {
-        try {
-            const request: HttpRequestConfig = {
-                url: URLs.rewards.userInfoApi,
-                method: 'GET',
-                timeout: Math.max(20000, this.bot.utils.stringToNumber(this.bot.config.globalTimeout)),
-                headers: {
-                    ...(this.bot.fingerprint?.headers ?? {}),
-                    Cookie: this.buildCookieHeader(cookies ?? this.bot.cookies.mobile, [
-                        'bing.com',
-                        'live.com',
-                        'microsoftonline.com'
-                    ]),
-                    Referer: URLs.rewards.referer,
-                    Origin: URLs.rewards.origin
-                }
+    async getDashboardData(cookies?: Cookie[], page?: Page): Promise<DashboardData> {
+        const request: HttpRequestConfig = {
+            url: URLs.rewards.userInfoApi,
+            method: 'GET',
+            timeout: Math.max(20000, this.bot.utils.stringToNumber(this.bot.config.globalTimeout)),
+            headers: {
+                ...(this.bot.fingerprint?.headers ?? {}),
+                Cookie: this.buildCookieHeader(cookies ?? this.bot.cookies.mobile, [
+                    'bing.com',
+                    'live.com',
+                    'microsoftonline.com'
+                ]),
+                Referer: URLs.rewards.referer,
+                Origin: URLs.rewards.origin
             }
+        }
 
+        try {
             const response = await this.bot.http.request(request)
 
             if (response.data) {
@@ -117,6 +117,29 @@ export default class BrowserFunc {
             }
             throw new Error('Dashboard data missing from API response')
         } catch (error) {
+            // The browser context is already bound to the account's configured
+            // proxy. If Impit's separate proxy transport is temporarily stuck,
+            // reuse that authenticated/proxied context instead of falling back
+            // to a direct connection or failing a search-progress measurement.
+            if (error instanceof ProxyUnavailableError && page && !page.isClosed()) {
+                try {
+                    const data = await this.getDashboardDataFromBrowser(page, request)
+                    this.bot.logger.warn(
+                        this.bot.isMobile,
+                        'GET-DASHBOARD-DATA',
+                        'Primary proxy transport unavailable; recovered through browser-context proxy transport'
+                    )
+                    return data
+                } catch (fallbackError) {
+                    this.bot.logger.error(
+                        this.bot.isMobile,
+                        'GET-DASHBOARD-DATA',
+                        `Failed to get dashboard data: ${error.message} | browser-context fallback failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
+                    )
+                    throw fallbackError
+                }
+            }
+
             this.bot.logger.error(
                 this.bot.isMobile,
                 'GET-DASHBOARD-DATA',
@@ -124,6 +147,29 @@ export default class BrowserFunc {
             )
             throw error
         }
+    }
+
+    private async getDashboardDataFromBrowser(page: Page, request: HttpRequestConfig): Promise<DashboardData> {
+        const headers = Object.fromEntries(
+            Object.entries(request.headers ?? {})
+                .filter((entry): entry is [string, NonNullable<unknown>] => entry[1] !== undefined && entry[1] !== null)
+                .map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : String(value)])
+        )
+        const response = await page.request.get(request.url ?? URLs.rewards.userInfoApi, {
+            headers,
+            timeout: request.timeout
+        })
+
+        if (!response.ok()) {
+            throw new Error(`Browser-context dashboard request returned HTTP ${response.status()}`)
+        }
+
+        const data: unknown = await response.json()
+        if (!data || typeof data !== 'object' || !('dashboard' in data)) {
+            throw new Error('Dashboard data missing from browser-context response')
+        }
+
+        return data as DashboardData
     }
 
     async getAppDashboardData(): Promise<AppDashboardData> {
@@ -149,8 +195,8 @@ export default class BrowserFunc {
         }
     }
 
-    async getSearchPoints(): Promise<Counters> {
-        const dashboardData = await this.getDashboardData() // Always fetch newest data
+    async getSearchPoints(page?: Page): Promise<Counters> {
+        const dashboardData = await this.getDashboardData(undefined, page) // Always fetch newest data
 
         return dashboardData.dashboard.userStatus.counters
     }

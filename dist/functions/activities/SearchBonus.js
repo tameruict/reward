@@ -6,6 +6,7 @@ const BING_TRACKING_PARAMS = new Set(['form', 'ocid', 'publ', 'crea', 'pc', 'cha
 class BonusTracker {
     bot;
     isMobile;
+    page;
     context = 'SEARCH-BONUS';
     maxSearches;
     stagnantLimit = BONUS_STAGNANT_LIMIT;
@@ -15,9 +16,10 @@ class BonusTracker {
     max = 0;
     current = 0;
     balance = 0;
-    constructor(bot, isMobile) {
+    constructor(bot, isMobile, page) {
         this.bot = bot;
         this.isMobile = isMobile;
+        this.page = page;
         this.maxSearches = Math.max(0, Number(this.bot.config.searchSettings.maxBonusSearches ?? 0));
     }
     async prepare() {
@@ -27,7 +29,7 @@ class BonusTracker {
         }
         let dashboard;
         try {
-            dashboard = (await this.bot.browser.func.getDashboardData()).dashboard;
+            dashboard = (await this.bot.browser.func.getDashboardData(undefined, this.page)).dashboard;
         }
         catch (error) {
             this.bot.logger.warn(this.isMobile, this.context, `Could not fetch dashboard, skipping bonus farming | ${error instanceof Error ? error.message : String(error)}`);
@@ -49,7 +51,7 @@ class BonusTracker {
     async measure() {
         let dash;
         try {
-            dash = (await this.bot.browser.func.getDashboardData()).dashboard;
+            dash = (await this.bot.browser.func.getDashboardData(undefined, this.page)).dashboard;
         }
         catch {
             return 0;

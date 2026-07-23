@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const urls_1 = require("../constants/urls");
 const ghost_cursor_playwright_port_1 = require("ghost-cursor-playwright-port");
+const BAD_PAGE_RELOAD_TIMEOUT = 20000;
 class BrowserUtils {
     bot;
     suspendedAccountNotified = new Set();
@@ -130,12 +131,8 @@ class BrowserUtils {
             const isBadPage = /<body[^>]*\bclass=["'][^"']*\bneterror\b/i.test(html);
             if (isBadPage) {
                 this.bot.logger.info(this.bot.isMobile, 'RELOAD-BAD-PAGE', 'Bad page detected, reloading!');
-                try {
-                    await page.reload({ waitUntil: 'load' });
-                }
-                catch {
-                    await page.reload().catch(() => { });
-                }
+                await page.reload({ waitUntil: 'commit', timeout: BAD_PAGE_RELOAD_TIMEOUT });
+                await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => { });
                 return true;
             }
             else {
@@ -192,8 +189,14 @@ class BrowserUtils {
     async ghostClick(page, selector, options) {
         try {
             this.bot.logger.debug(this.bot.isMobile, 'GHOST-CLICK', `Trying to click selector: ${selector}, options: ${JSON.stringify(options)}`);
-            // Wait for selector to exist before clicking
-            await page.waitForSelector(selector, { timeout: 1000 }).catch(() => { });
+            // Do not hand a missing target to ghost-cursor. Besides producing a
+            // misleading warning, ghost-cursor waits again using the page's much
+            // longer default timeout.
+            const target = await page.waitForSelector(selector, { state: 'visible', timeout: 1500 }).catch(() => null);
+            if (!target) {
+                this.bot.logger.debug(this.bot.isMobile, 'GHOST-CLICK', `Skipped missing selector: ${selector}`);
+                return false;
+            }
             // ghost-cursor expects its own Playwright Page type from a different
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const cursor = (0, ghost_cursor_playwright_port_1.createCursor)(page);

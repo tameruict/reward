@@ -1,8 +1,10 @@
 import type { SearchTracker } from '../../interface/Search';
 import type { MicrosoftRewardsBot } from '../../index';
+import type { Page } from 'patchright';
 export declare class BonusTracker implements SearchTracker {
     private bot;
     private isMobile;
+    private page?;
     readonly context = "SEARCH-BONUS";
     readonly maxSearches: number;
     readonly stagnantLimit = 20;
@@ -12,7 +14,7 @@ export declare class BonusTracker implements SearchTracker {
     private max;
     private current;
     private balance;
-    constructor(bot: MicrosoftRewardsBot, isMobile: boolean);
+    constructor(bot: MicrosoftRewardsBot, isMobile: boolean, page?: Page | undefined);
     prepare(): Promise<boolean>;
     measure(): Promise<number>;
     done(): boolean;

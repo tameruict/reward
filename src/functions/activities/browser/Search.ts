@@ -12,12 +12,15 @@ import type { MicrosoftRewardsBot } from '../../../index'
 const REFRESH_EVERY = 10
 const MAX_QUERY_ATTEMPTS = 5
 const MAX_MEASUREMENT_FAILURES = 3
+const BING_NAVIGATION_TIMEOUT = 20000
+const BING_DOM_READY_TIMEOUT = 8000
+const RESULT_READY_TIMEOUT = 8000
 
 const POINTS_MAX_SEARCHES = 100
 const POINTS_STAGNANT_LIMIT = 10
 
 const SEARCH_BOX_SELECTORS = ['#sb_form_q', 'textarea[name="q"]', 'input[name="q"]'] as const
-const RESULT_LINK = '#b_results .b_algo h2'
+const RESULT_LINK_SELECTORS = ['#b_results .b_algo h2 a', '#b_results .b_algo a[href]', 'main .b_algo h2 a'] as const
 
 interface SessionStats {
     totalGained: number
@@ -32,7 +35,7 @@ export class Search extends Workers {
         const startBalance = Number(this.bot.userData.currentPoints ?? 0)
         this.bot.logger.info(isMobile, 'SEARCH-BING', `Starting Bing searches | currentBalance=${startBalance}`)
 
-        const tracker = new PointsTracker(this.bot, isMobile)
+        const tracker = new PointsTracker(this.bot, isMobile, page)
         try {
             const stats = await this.runSearchSession(page, isMobile, tracker)
 
@@ -51,13 +54,13 @@ export class Search extends Workers {
             )
             return stats.totalGained
         } finally {
-            await page.goto(URLs.bing.origin).catch(() => {})
+            await this.navigateToBing(page, URLs.bing.origin, isMobile).catch(() => {})
         }
     }
 
     public async doBonusSearches(page: Page): Promise<number> {
         const isMobile = this.bot.isMobile
-        const tracker = new BonusTracker(this.bot, isMobile)
+        const tracker = new BonusTracker(this.bot, isMobile, page)
 
         const stats = await this.runSearchSession(page, isMobile, tracker)
 
@@ -100,9 +103,7 @@ export class Search extends Workers {
             }
             this.bot.logger.info(isMobile, tracker.context, `Query pool ready | count=${queries.length}`)
 
-            await page.goto(URLs.bing.origin)
-            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {})
-            await this.bot.browser.utils.tryDismissAllMessages(page)
+            await this.navigateToBing(page, URLs.bing.origin, isMobile)
 
             let index = 0
 
@@ -186,9 +187,7 @@ export class Search extends Workers {
         this.searchCount++
 
         if (this.searchCount % REFRESH_EVERY === 0) {
-            await page.goto(URLs.bing.origin)
-            await page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {})
-            await this.bot.browser.utils.tryDismissAllMessages(page)
+            await this.navigateToBing(page, URLs.bing.origin, isMobile)
         }
 
         let lastError: unknown
@@ -206,7 +205,8 @@ export class Search extends Workers {
 
                 await page.keyboard.type(query, { delay: this.bot.utils.randomDelay(45, 90) })
                 await page.keyboard.press('Enter')
-                await this.bot.utils.wait(3000)
+                await page.waitForLoadState('domcontentloaded', { timeout: BING_DOM_READY_TIMEOUT }).catch(() => {})
+                await this.bot.utils.wait(1500)
 
                 if (this.bot.config.searchSettings.scrollRandomResults) {
                     await this.bot.utils.wait(2000)
@@ -263,9 +263,7 @@ export class Search extends Workers {
         if (recovered) return recovered
 
         const cvid = randomBytes(16).toString('hex')
-        await page.goto(URLs.bing.search(query, cvid))
-        await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {})
-        await this.bot.browser.utils.tryDismissAllMessages(page)
+        await this.navigateToBing(page, URLs.bing.search(query, cvid), isMobile)
 
         const afterDirectSearch = await this.visibleSearchBox(page, 5000)
         if (afterDirectSearch) return afterDirectSearch
@@ -274,7 +272,10 @@ export class Search extends Workers {
         throw new Error(`Bing search box not visible | url=${page.url()} | title="${title}"`)
     }
 
-    private async visibleSearchBox(page: Page, timeout = 750): Promise<{ selector: string; searchBox: Locator } | null> {
+    private async visibleSearchBox(
+        page: Page,
+        timeout = 750
+    ): Promise<{ selector: string; searchBox: Locator } | null> {
         for (const selector of SEARCH_BOX_SELECTORS) {
             const searchBox = page.locator(selector).first()
             const visible = await searchBox.isVisible({ timeout }).catch(() => false)
@@ -289,9 +290,7 @@ export class Search extends Workers {
         await this.bot.browser.utils.tryDismissAllMessages(page)
         if (await this.visibleSearchBox(page).catch(() => null)) return
 
-        await page.goto(URLs.bing.origin)
-        await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {})
-        await this.bot.browser.utils.tryDismissAllMessages(page)
+        await this.navigateToBing(page, URLs.bing.origin, isMobile)
 
         if (before !== page.url()) {
             this.bot.logger.debug(isMobile, 'SEARCH-BING', `Recovered search page | from=${before} | to=${page.url()}`)
@@ -315,12 +314,24 @@ export class Search extends Workers {
 
     private async clickRandomLink(page: Page, isMobile: boolean) {
         try {
+            const resultSelector = await this.visibleResultLink(page, RESULT_READY_TIMEOUT)
+            if (!resultSelector) {
+                this.bot.logger.debug(
+                    isMobile,
+                    'SEARCH-RANDOM-CLICK',
+                    `No visible organic result; skipping click | url=${page.url()}`
+                )
+                return
+            }
+
             const searchPageUrl = page.url()
-            await this.bot.browser.utils.ghostClick(page, RESULT_LINK)
+            const clicked = await this.bot.browser.utils.ghostClick(page, resultSelector)
+            if (!clicked) return
+
             await this.bot.utils.wait(this.bot.config.searchSettings.searchResultVisitTime)
 
             if (isMobile) {
-                await page.goto(searchPageUrl)
+                await this.navigateToBing(page, searchPageUrl, isMobile)
             } else {
                 const newTab = await this.bot.browser.utils.getLatestTab(page)
                 await this.bot.browser.utils.closeTabs(newTab)
@@ -332,6 +343,46 @@ export class Search extends Workers {
                 `Failed during random click | ${error instanceof Error ? error.message : String(error)}`
             )
         }
+    }
+
+    private async visibleResultLink(page: Page, timeout: number): Promise<string | null> {
+        const deadline = Date.now() + timeout
+
+        while (Date.now() < deadline) {
+            for (const selector of RESULT_LINK_SELECTORS) {
+                const visible = await page
+                    .locator(selector)
+                    .first()
+                    .isVisible({ timeout: Math.min(500, Math.max(1, deadline - Date.now())) })
+                    .catch(() => false)
+                if (visible) return selector
+            }
+            await this.bot.utils.wait(250)
+        }
+
+        return null
+    }
+
+    private async navigateToBing(page: Page, url: string, isMobile: boolean): Promise<void> {
+        await page.goto(url, {
+            waitUntil: 'commit',
+            timeout: BING_NAVIGATION_TIMEOUT
+        })
+
+        const domReady = await page
+            .waitForLoadState('domcontentloaded', { timeout: BING_DOM_READY_TIMEOUT })
+            .then(() => true)
+            .catch(() => false)
+
+        if (!domReady) {
+            this.bot.logger.debug(
+                isMobile,
+                'SEARCH-BING',
+                `DOMContentLoaded not observed; continuing after committed navigation | url=${page.url()}`
+            )
+        }
+
+        await this.bot.browser.utils.tryDismissAllMessages(page)
     }
 }
 
@@ -345,14 +396,15 @@ class PointsTracker implements SearchTracker {
 
     constructor(
         private bot: MicrosoftRewardsBot,
-        private isMobile: boolean
+        private isMobile: boolean,
+        private page: Page
     ) {
         this.runOnZeroPoints = this.bot.config.searchSettings.runOnZeroPoints ?? false
     }
 
     async prepare(): Promise<boolean> {
         this.missing = this.bot.browser.func.missingSearchPoints(
-            await this.bot.browser.func.getSearchPoints(),
+            await this.bot.browser.func.getSearchPoints(this.page),
             this.isMobile
         )
         this.bot.logger.info(
@@ -381,7 +433,7 @@ class PointsTracker implements SearchTracker {
 
     async measure(): Promise<number> {
         const updated = this.bot.browser.func.missingSearchPoints(
-            await this.bot.browser.func.getSearchPoints(),
+            await this.bot.browser.func.getSearchPoints(this.page),
             this.isMobile
         )
         const gained = Math.max(0, this.missing.totalPoints - updated.totalPoints)
