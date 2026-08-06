@@ -201,6 +201,7 @@ export function loadAccountsFromEnv(projectRoot) {
             recoveryEmail: envStr(`ACCOUNT_${idx}_RECOVERY_EMAIL`) ?? '',
             geoLocale: envStr(`ACCOUNT_${idx}_GEO_LOCALE`) ?? 'auto',
             langCode: envStr(`ACCOUNT_${idx}_LANG_CODE`) ?? 'en',
+            useProxy: envBool(`ACCOUNT_${idx}_USE_PROXY`, true),
             proxy: {
                 proxyHttp: envBoolWithLegacy(`ACCOUNT_${idx}_PROXY_HTTP`, `ACCOUNT_${idx}_PROXY_AXIOS`, false),
                 url: envStr(`ACCOUNT_${idx}_PROXY_URL`) ?? '',
@@ -261,6 +262,7 @@ export function ensureAccountsDatabase(dbPath) {
                 geo_locale TEXT NOT NULL DEFAULT 'auto',
                 lang_code TEXT NOT NULL DEFAULT 'en',
                 proxy_id TEXT REFERENCES proxies(id) ON UPDATE CASCADE ON DELETE SET NULL,
+                use_proxy INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'ready',
                 slot INTEGER,
                 save_fingerprint_mobile INTEGER NOT NULL DEFAULT 1,
@@ -295,6 +297,15 @@ export function ensureAccountsDatabase(dbPath) {
         if (!proxyColumns.has('egress_ip')) {
             db.exec('ALTER TABLE proxies ADD COLUMN egress_ip TEXT')
         }
+        const accountColumns = new Set(
+            db
+                .prepare('PRAGMA table_info(accounts)')
+                .all()
+                .map(row => row.name)
+        )
+        if (!accountColumns.has('use_proxy')) {
+            db.exec('ALTER TABLE accounts ADD COLUMN use_proxy INTEGER NOT NULL DEFAULT 1')
+        }
         db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_proxies_identity_key ON proxies(identity_key)')
     } finally {
         db.close()
@@ -320,6 +331,7 @@ export function loadAccountsFromDatabase(projectRoot) {
                     a.geo_locale,
                     a.lang_code,
                     a.proxy_id,
+                    a.use_proxy,
                     a.status AS account_status,
                     a.slot,
                     a.save_fingerprint_mobile,
@@ -341,6 +353,7 @@ export function loadAccountsFromDatabase(projectRoot) {
         return rows.map(row => ({
             accountId: row.account_id,
             proxyId: row.proxy_id,
+            useProxy: Boolean(row.use_proxy),
             status: row.account_status,
             slot: row.slot ?? undefined,
             email: row.email,

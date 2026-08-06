@@ -12,7 +12,8 @@ declare class Browser {
     constructor(bot: MicrosoftRewardsBot);
     createBrowser(account: Account): Promise<BrowserCreationResult>;
     private assertProxyReachable;
-    generateFingerprint(isMobile: boolean): Promise<BrowserFingerprintWithHeaders>;
+    private resolveGeo;
+    generateFingerprint(isMobile: boolean, locale?: string): Promise<BrowserFingerprintWithHeaders>;
 }
 export default Browser;
 //# sourceMappingURL=Browser.d.ts.map

@@ -60,7 +60,21 @@ export declare const ConfigSchema: z.ZodObject<{
     debugLogs: z.ZodBoolean;
     proxy: z.ZodObject<{
         queryEngine: z.ZodBoolean;
+        verifyExitIp: z.ZodDefault<z.ZodBoolean>;
+        onProxyMismatch: z.ZodDefault<z.ZodEnum<{
+            warn: "warn";
+            off: "off";
+            skip: "skip";
+        }>>;
     }, z.core.$strip>;
+    accountLifecycle: z.ZodDefault<z.ZodObject<{
+        autoDisableSuspended: z.ZodDefault<z.ZodBoolean>;
+        mode: z.ZodDefault<z.ZodEnum<{
+            off: "off";
+            disable: "disable";
+            delete: "delete";
+        }>>;
+    }, z.core.$strip>>;
     consoleLogFilter: z.ZodObject<{
         enabled: z.ZodBoolean;
         mode: z.ZodEnum<{
@@ -115,6 +129,7 @@ export declare const ConfigSchema: z.ZodObject<{
 export declare const AccountSchema: z.ZodObject<{
     accountId: z.ZodOptional<z.ZodString>;
     proxyId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    useProxy: z.ZodOptional<z.ZodBoolean>;
     status: z.ZodOptional<z.ZodString>;
     slot: z.ZodOptional<z.ZodNumber>;
     email: z.ZodString;
@@ -129,6 +144,7 @@ export declare const AccountSchema: z.ZodObject<{
         port: z.ZodNumber;
         password: z.ZodString;
         username: z.ZodString;
+        expectedEgressIp: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
     saveFingerprint: z.ZodObject<{
         mobile: z.ZodBoolean;

@@ -11,7 +11,15 @@ const dateTime = value => value ? new Intl.DateTimeFormat("vi-VN", { dateStyle: 
 const duration = ms => ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} giây`;
 
 function statusLabel(status) {
-  return ({ success: "Thành công", error: "Có lỗi", running: "Đang check", pending: "Đang chờ", cancelled: "Đã hủy", completed: "Hoàn tất", completed_with_errors: "Hoàn tất có lỗi", interrupted: "Bị gián đoạn", stopping: "Đang dừng" })[status] || "Chưa check";
+  return ({ success: "Thành công", error: "Có lỗi", suspended: "Bị đình chỉ", locked: "Bị khóa", running: "Đang check", pending: "Đang chờ", cancelled: "Đã hủy", completed: "Hoàn tất", completed_with_errors: "Hoàn tất có lỗi", interrupted: "Bị gián đoạn", stopping: "Đang dừng" })[status] || "Chưa check";
+}
+
+// Account states that mean the account itself is unusable (not a transient
+// check error). Surface them as their own status in the "Trạng thái" column.
+const UNUSABLE_CODES = new Set(["suspended", "locked"]);
+function displayStatus(check) {
+  if (check?.status === "error" && UNUSABLE_CODES.has(check.errorCode)) return check.errorCode;
+  return check?.status;
 }
 
 function statusChip(status, message = "") {
@@ -47,6 +55,7 @@ function renderSummary() {
   $("#metricChecked").textContent = number(data.checked);
   $("#metricCheckedSub").textContent = data.accounts ? `${Math.round((data.checked || 0) / data.accounts * 100)}% tài khoản` : "chưa có dữ liệu";
   $("#metricFailed").textContent = number(data.failed);
+  $("#metricFailedSub").textContent = data.suspended ? `${number(data.suspended)} tài khoản bị đình chỉ` : "cần kiểm tra lại";
   $("#metricProxies").textContent = number(data.proxies);
 }
 
@@ -56,7 +65,7 @@ function accountRow(account, selectable = false) {
     ${selectable ? `<td class="select-cell"><input class="account-check" type="checkbox" value="${escapeHtml(account.id)}" ${state.selected.has(account.id) ? "checked" : ""} aria-label="Chọn ${escapeHtml(account.email)}"></td><td>${account.slot ?? "—"}</td>` : ""}
     <td><div class="account-name"><strong>${escapeHtml(account.email)}</strong><small>${escapeHtml(account.status)}</small></div></td>
     <td><span class="proxy-name">${escapeHtml(account.proxyLabel)}</span></td>
-    <td>${statusChip(check?.status, check?.errorMessage)}</td>
+    <td>${statusChip(displayStatus(check), check?.errorMessage)}</td>
     <td class="number points-value">${number(check?.points)}</td>
     <td class="number">${delta(check?.delta)}</td>
     ${selectable ? `<td>${escapeHtml(check?.country || "—")}</td>` : ""}
@@ -69,7 +78,7 @@ function filteredAccounts() {
   const filter = $("#statusFilter")?.value || "all";
   return state.accounts.filter(account => {
     const matchesQuery = !query || account.email.toLowerCase().includes(query) || account.proxyLabel.toLowerCase().includes(query);
-    const status = account.lastCheck?.status || "unchecked";
+    const status = displayStatus(account.lastCheck) || "unchecked";
     return matchesQuery && (filter === "all" || filter === status);
   });
 }

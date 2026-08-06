@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RewardsAuthenticationRequiredError = void 0;
 const crypto_1 = require("crypto");
 const urls_1 = require("../constants/urls");
-const userAgents_1 = require("../constants/userAgents");
+const DeviceIdentity_1 = require("./DeviceIdentity");
 const Http_1 = require("../util/Http");
 const SessionStore_1 = require("../util/SessionStore");
 const Utils_1 = require("../util/Utils");
@@ -140,12 +140,15 @@ class BrowserFunc {
     async getAppDashboardData() {
         try {
             const request = {
-                url: urls_1.URLs.platform.me('SAIOS'),
+                url: urls_1.URLs.platform.me(this.bot.mobileDevice.channel),
                 method: 'GET',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'User-Agent': userAgents_1.BING_APP_USER_AGENT
-                }
+                headers: (0, DeviceIdentity_1.buildAppHeaders)({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent
+                })
             };
             const response = await this.bot.http.request(request);
             return response.data;
@@ -200,14 +203,15 @@ class BrowserFunc {
         try {
             const eligibleOffers = ['ENUS_readarticle3_30points', 'Gamification_Sapphire_DailyCheckIn'];
             const request = {
-                url: urls_1.URLs.platform.me('SAAndroid'),
+                url: urls_1.URLs.platform.me(this.bot.mobileDevice.channel),
                 method: 'GET',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'X-Rewards-Country': this.bot.userData.geoLocale,
-                    'X-Rewards-Language': 'en',
-                    'X-Rewards-ismobile': 'true'
-                }
+                headers: (0, DeviceIdentity_1.buildAppHeaders)({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent
+                })
             };
             const response = await this.bot.http.request(request);
             const userData = response.data;

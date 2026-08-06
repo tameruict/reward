@@ -32,6 +32,9 @@ function loadAccountsFromEnvObject(sourceEnv) {
             recoveryEmail: envStrFrom(sourceEnv, `ACCOUNT_${i}_RECOVERY_EMAIL`) ?? '',
             geoLocale: envStrFrom(sourceEnv, `ACCOUNT_${i}_GEO_LOCALE`) ?? 'auto',
             langCode: envStrFrom(sourceEnv, `ACCOUNT_${i}_LANG_CODE`) ?? 'en',
+            useProxy: !['0', 'false', 'no', 'off'].includes(
+                (envStrFrom(sourceEnv, `ACCOUNT_${i}_USE_PROXY`) ?? 'true').toLowerCase()
+            ),
             proxy: {
                 proxyHttp: ['1', 'true', 'yes', 'on'].includes(
                     (
@@ -76,6 +79,7 @@ function accountToEnv(account, targetIndex) {
         [`${prefix}RECOVERY_EMAIL`]: account.recoveryEmail ?? '',
         [`${prefix}GEO_LOCALE`]: account.geoLocale ?? 'auto',
         [`${prefix}LANG_CODE`]: account.langCode ?? 'en',
+        [`${prefix}USE_PROXY`]: account.useProxy === false ? 'false' : 'true',
         [`${prefix}SAVE_FINGERPRINT_MOBILE`]: account.saveFingerprint?.mobile ? 'true' : 'false',
         [`${prefix}SAVE_FINGERPRINT_DESKTOP`]: account.saveFingerprint?.desktop ? 'true' : 'false'
     }
@@ -107,6 +111,7 @@ export function loadAccounts(sourceEnv = process.env) {
             emailKey: account.email, // internal history join key; removed before returning the response
             geoLocale: account.geoLocale ?? 'auto',
             langCode: account.langCode ?? 'en',
+            useProxy: account.useProxy !== false,
             hasRecoveryEmail: Boolean(account.recoveryEmail),
             hasTotp: Boolean(account.totpSecret),
             proxy: proxyUrl

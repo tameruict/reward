@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getProjectRoot = getProjectRoot;
 exports.loadAccounts = loadAccounts;
 exports.loadConfig = loadConfig;
 const fs_1 = __importDefault(require("fs"));
@@ -128,6 +129,7 @@ function loadAccountsFromEnv() {
             recoveryEmail: envStr(`ACCOUNT_${index}_RECOVERY_EMAIL`) ?? '',
             geoLocale: envStr(`ACCOUNT_${index}_GEO_LOCALE`) ?? 'auto',
             langCode: envStr(`ACCOUNT_${index}_LANG_CODE`) ?? 'en',
+            useProxy: envBool(`ACCOUNT_${index}_USE_PROXY`, true),
             proxy: buildProxy(index),
             saveFingerprint: buildSaveFingerprint(index)
         });
@@ -163,6 +165,8 @@ function loadAccounts() {
 }
 function requireAccountProxies(accounts) {
     for (const account of accounts) {
+        if (account.useProxy === false)
+            continue;
         try {
             (0, ProxyConfig_1.parseProxyConfig)(account.proxy);
         }

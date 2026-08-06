@@ -505,7 +505,10 @@ export class JobStore {
                         FROM accounts a
                         LEFT JOIN proxies p ON p.id = a.proxy_id
                         WHERE a.status IN ('ready', 'active')
-                          AND (a.proxy_id IS NULL OR p.status = 'active')
+                          AND (
+                              (a.use_proxy = 0 AND a.proxy_id IS NULL)
+                              OR (a.use_proxy = 1 AND a.proxy_id IS NOT NULL AND p.status = 'active')
+                          )
                     `
                     )
                     .get().value
@@ -524,7 +527,10 @@ export class JobStore {
                     FROM accounts a
                     LEFT JOIN proxies p ON p.id = a.proxy_id
                     WHERE a.status IN ('ready', 'active')
-                      AND (a.proxy_id IS NULL OR p.status = 'active')
+                      AND (
+                          (a.use_proxy = 0 AND a.proxy_id IS NULL)
+                          OR (a.use_proxy = 1 AND a.proxy_id IS NOT NULL AND p.status = 'active')
+                      )
                       AND (? IS NULL OR NOT EXISTS (
                           SELECT 1 FROM account_run_successes previous
                           WHERE previous.account_id = a.id

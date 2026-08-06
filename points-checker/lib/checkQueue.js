@@ -33,15 +33,27 @@ class CheckQueue {
     }
 
     const run = this.database.createRun(accounts, source);
-    const proxyRoutes = new Set(accounts.map(account => account.lockKey)).size;
+    // One route per distinct proxy. Each route may run up to the proxy's own
+    // max_concurrency (default 1); accounts sharing a route beyond that limit
+    // are serialized. The pool size is the sum of every route's slots, so full
+    // concurrency scales with the number of proxies actually in use.
+    const routeLimits = new Map();
+    for (const account of accounts) {
+      const limit = Math.max(1, account.routeConcurrency || 1);
+      const current = routeLimits.get(account.lockKey);
+      routeLimits.set(account.lockKey, current == null ? limit : Math.min(current, limit));
+    }
+    const proxyRoutes = routeLimits.size;
+    const poolSize = [...routeLimits.values()].reduce((sum, limit) => sum + limit, 0);
     this.activeRun = {
       id: run.id,
       pending: [...accounts],
       active: new Map(),
-      locks: new Set(),
+      locks: new Map(),
+      routeLimits,
       stopping: false,
       proxyRoutes,
-      maxConcurrency: Math.max(1, Math.min(proxyRoutes, this.maxConcurrency ?? proxyRoutes)),
+      maxConcurrency: Math.max(1, Math.min(poolSize, this.maxConcurrency ?? poolSize)),
     };
     this.database.markRunStarted(run.id);
     this.eventHub.emit("run", { action: "started", run: this.database.getRun(run.id) });
@@ -66,10 +78,14 @@ class CheckQueue {
     if (!state) return;
 
     while (!state.stopping && state.active.size < state.maxConcurrency && state.pending.length) {
-      const index = state.pending.findIndex(account => !state.locks.has(account.lockKey));
+      const index = state.pending.findIndex(account => {
+        const used = state.locks.get(account.lockKey) || 0;
+        const limit = state.routeLimits.get(account.lockKey) || 1;
+        return used < limit;
+      });
       if (index === -1) break;
       const [account] = state.pending.splice(index, 1);
-      state.locks.add(account.lockKey);
+      state.locks.set(account.lockKey, (state.locks.get(account.lockKey) || 0) + 1);
       state.active.set(account.id, account);
       void this.runAccount(state, account);
     }
@@ -104,7 +120,9 @@ class CheckQueue {
     } finally {
       if (this.activeRun?.id !== state.id) return;
       state.active.delete(account.id);
-      state.locks.delete(account.lockKey);
+      const remaining = (state.locks.get(account.lockKey) || 1) - 1;
+      if (remaining > 0) state.locks.set(account.lockKey, remaining);
+      else state.locks.delete(account.lockKey);
       this.eventHub.emit("snapshot", { run: this.database.getRun(state.id), summary: this.database.summary() });
       this.pump();
     }

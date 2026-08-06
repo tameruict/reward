@@ -16,7 +16,11 @@ npm start
 
 Open <http://127.0.0.1:8891>.
 
-By default, each active proxy route gets one concurrent check worker. Accounts sharing the same proxy are still checked sequentially. Set `MAX_CONCURRENCY` to a number to cap the number of workers, or leave it as `auto` for full proxy-based concurrency.
+## Concurrency
+
+Checks run in parallel, one lane per proxy. A "route" is a distinct proxy, identified by its egress IP when known and otherwise by its proxy identity — so proxies whose egress IP is still blank (e.g. auto-provisioned ones) are each treated as their own lane rather than collapsing onto one. Every route runs up to that proxy's `max_concurrency` (default `1`), and accounts beyond that limit on the same proxy are checked sequentially.
+
+With `MAX_CONCURRENCY=auto` (the default), the worker pool scales to the sum of every in-use proxy's `max_concurrency` — i.e. full proxy-based concurrency. For example, 20 accounts spread across 6 proxies run 6 checks at a time. Set `MAX_CONCURRENCY` to a number to cap the pool (useful if launching that many headless browsers at once strains the machine).
 
 The default database path is `../data/accounts.db`. Keep `ACCOUNTS_DB_KEY` identical to the value used by the parent bot when database credentials are encrypted.
 

@@ -102,7 +102,8 @@ class PointsDatabase {
       SELECT
         a.id, a.slot, a.email, a.status,
         p.id AS proxy_id, p.label AS proxy_label, p.status AS proxy_status,
-        COALESCE(p.egress_ip, p.identity_key, p.id, 'direct:default') AS lock_key,
+        p.max_concurrency AS route_concurrency,
+        COALESCE(NULLIF(TRIM(p.egress_ip), ''), NULLIF(TRIM(p.identity_key), ''), p.id, 'direct:default') AS lock_key,
         latest.status AS check_status,
         latest.points, latest.point_delta, latest.country,
         latest.duration_ms, latest.error_code, latest.error_message,
@@ -119,6 +120,7 @@ class PointsDatabase {
       proxyId: row.proxy_id,
       proxyLabel: row.proxy_label || "Direct",
       proxyStatus: row.proxy_status,
+      routeConcurrency: Math.max(1, Number(row.route_concurrency) || 1),
       lockKey: row.proxy_id ? `proxy:${row.lock_key}` : "direct:default",
       lastCheck: row.check_status ? {
         status: row.check_status,
@@ -285,12 +287,17 @@ class PointsDatabase {
     const accounts = this.listAccounts();
     const active = accounts.filter(a => ["ready", "active"].includes(a.status));
     const checked = active.filter(a => a.lastCheck?.status === "success");
-    const failed = active.filter(a => a.lastCheck?.status === "error");
+    // A suspended/locked account is unusable, not a transient failure — count it
+    // separately so "failed" reflects only checks worth retrying.
+    const isUnusable = check => check?.status === "error" && ["suspended", "locked"].includes(check.errorCode);
+    const suspended = active.filter(a => isUnusable(a.lastCheck));
+    const failed = active.filter(a => a.lastCheck?.status === "error" && !isUnusable(a.lastCheck));
     const latestRun = this.listRuns(1)[0] || null;
     return {
       accounts: active.length,
       checked: checked.length,
       failed: failed.length,
+      suspended: suspended.length,
       totalPoints: checked.reduce((sum, account) => sum + Number(account.lastCheck.points || 0), 0),
       proxies: new Set(active.map(account => account.proxyId).filter(Boolean)).size,
       latestRun,

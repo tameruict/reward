@@ -10,7 +10,7 @@ import { validateAccounts, validateConfig } from './Validator'
 let configCache: Config
 let envLoaded = false
 
-function getProjectRoot(): string {
+export function getProjectRoot(): string {
     const cwd = process.cwd()
     if (fs.existsSync(path.join(cwd, 'package.json'))) return cwd
 
@@ -136,6 +136,7 @@ function loadAccountsFromEnv(): Account[] {
             recoveryEmail: envStr(`ACCOUNT_${index}_RECOVERY_EMAIL`) ?? '',
             geoLocale: envStr(`ACCOUNT_${index}_GEO_LOCALE`) ?? 'auto',
             langCode: envStr(`ACCOUNT_${index}_LANG_CODE`) ?? 'en',
+            useProxy: envBool(`ACCOUNT_${index}_USE_PROXY`, true),
             proxy: buildProxy(index),
             saveFingerprint: buildSaveFingerprint(index)
         })
@@ -181,6 +182,7 @@ export function loadAccounts(): Account[] {
 
 function requireAccountProxies(accounts: Account[]): Account[] {
     for (const account of accounts) {
+        if (account.useProxy === false) continue
         try {
             parseProxyConfig(account.proxy)
         } catch {

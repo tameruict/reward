@@ -48,6 +48,9 @@ export async function sendNtfy(config: WebhookNtfyConfig, content: string, level
         } catch (err) {
             const status = (err as { response?: { status?: number } })?.response?.status
             if (status === 429) return
+            console.warn(
+                `[Webhook:Ntfy] delivery failed${status ? ` (HTTP ${status})` : ''}: ${err instanceof Error ? err.message : String(err)}`
+            )
         }
     })
 }

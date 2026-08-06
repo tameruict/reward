@@ -48,12 +48,12 @@
         ],
         "searchResultVisitTime": "10sec",
         "searchDelay": {
-            "min": "30sec",
-            "max": "50sec"
+            "min": "25sec",
+            "max": "35sec"
         },
         "readDelay": {
-            "min": "30sec",
-            "max": "50sec"
+            "min": "25sec",
+            "max": "35sec"
         }
     },
     "experimental": {
@@ -69,7 +69,13 @@
         "regexPatterns": []
     },
     "proxy": {
-        "queryEngine": true
+        "queryEngine": true,
+        "verifyExitIp": true,
+        "onProxyMismatch": "warn"
+    },
+    "accountLifecycle": {
+        "autoDisableSuspended": true,
+        "mode": "disable"
     },
     "webhook": {
         "discord": {

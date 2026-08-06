@@ -14,8 +14,24 @@ export interface Config {
     experimental: ConfigExperimental
     debugLogs: boolean
     proxy: ConfigProxy
+    accountLifecycle: ConfigAccountLifecycle
     consoleLogFilter: LogFilter
     webhook: ConfigWebhook
+}
+
+/**
+ * Controls what happens to an account record when Microsoft reports it can no
+ * longer be used (suspended / banned). See src/util/AccountLifecycle.ts.
+ */
+export interface ConfigAccountLifecycle {
+    /** When true, a suspended/banned account is removed from future runs. */
+    autoDisableSuspended: boolean
+    /**
+     * - 'off'     : detect + notify only, never touch the DB.
+     * - 'disable' : set status='disabled' (reversible, excluded from runs). Default.
+     * - 'delete'  : hard-delete the row and block re-import (irreversible).
+     */
+    mode: 'off' | 'disable' | 'delete'
 }
 
 export type QueryEngine = 'google' | 'wikipedia' | 'wikirandom' | 'hackernews' | 'reddit' | 'local'
@@ -49,6 +65,15 @@ export interface ConfigExperimental {
 
 export interface ConfigProxy {
     queryEngine: boolean
+    /** Verify the proxy's real exit IP/country before running the account. Default true. */
+    verifyExitIp?: boolean
+    /**
+     * What to do when the observed exit IP/country disagrees with expectations:
+     * - 'warn' (default): log + webhook alert, still run.
+     * - 'skip': refuse to run the account this run.
+     * - 'off': don't act on a mismatch (still logs the observed exit).
+     */
+    onProxyMismatch?: 'warn' | 'skip' | 'off'
 }
 
 export interface ConfigWorkers {

@@ -20,6 +20,8 @@ function usage() {
   npm run accounts -- init
   npm run accounts -- keygen
   npm run accounts:import -- ./accounts.csv
+  npm run accounts:import -- ./accounts.txt --restore-deleted
+  npm run accounts:import -- ./accounts.txt --no-proxy
   npm run accounts -- list
   npm run accounts -- stats
   npm run accounts -- cleanup-proxies
@@ -36,16 +38,47 @@ try {
     } else if (command === 'keygen') {
         console.log(generateAccountsDbKey())
     } else if (command === 'import') {
-        const inputPath = args[0]
+        const restoreDeleted = args.includes('--restore-deleted')
+        const noProxy = args.includes('--no-proxy')
+        const knownOptions = new Set(['--restore-deleted', '--no-proxy'])
+        const unknownOptions = args.filter(arg => arg.startsWith('--') && !knownOptions.has(arg))
+        if (unknownOptions.length) throw new Error(`Unknown import option(s): ${unknownOptions.join(', ')}`)
+        const inputPath = args.find(arg => !arg.startsWith('--'))
         if (!inputPath) throw new Error('Import requires a .csv, .txt, or .json path.')
-        const bundle = loadAccountImportFile(inputPath)
-        const result = importAccountBundle(projectRoot, bundle)
+        const loadedBundle = loadAccountImportFile(inputPath)
+        const bundle = noProxy
+            ? {
+                  ...loadedBundle,
+                  proxies: [],
+                  autoAssignStoredProxies: false,
+                  allowDirectAccounts: true,
+                  accounts: loadedBundle.accounts.map(account => ({
+                      ...account,
+                      proxy: undefined,
+                      proxyLabel: undefined,
+                      proxy_label: undefined,
+                      useProxy: false
+                  }))
+              }
+            : loadedBundle
+        if (bundle.sourceFormat === 'pipe') {
+            console.log(
+                `Converted pipe-delimited input: ${bundle.accounts.length} account row(s), ${bundle.proxies.length} inline proxy record(s).`
+            )
+        }
+        if (noProxy) console.log(`Direct mode enabled: ${bundle.accounts.length} account(s) will run without proxy.`)
+        const result = importAccountBundle(projectRoot, bundle, { restoreDeleted })
         console.log(
             `Imported ${result.total} account(s): ${result.inserted} inserted, ${result.updated} updated, ${result.proxies} proxy record(s).`
         )
         if (result.skippedDeleted) {
             console.log(
                 `Skipped ${result.skippedDeleted} permanently deleted account(s): ${result.skippedDeletedEmails.join(', ')}`
+            )
+        }
+        if (result.restoredDeleted) {
+            console.log(
+                `Restored ${result.restoredDeleted} previously deleted account(s): ${result.restoredDeletedEmails.join(', ')}`
             )
         }
         console.log(`Database: ${result.dbPath}`)

@@ -13,10 +13,20 @@ import type { PageSnapshot } from './browser/ReactFunc'
 
 import { IpcLog, Logger } from './logging/Logger'
 import Utils, { isBrowserClosedError } from './util/Utils'
-import { loadAccounts, loadConfig } from './util/Load'
+import { loadAccounts, loadConfig, getProjectRoot } from './util/Load'
 import { closeSessionStore } from './util/SessionStore'
 import { checkNodeVersion } from './util/Validator'
 import { buildProxyAwareChunks, groupAccountsByProxy } from './util/ProxyScheduler'
+import { disableAccountInDatabase } from './util/AccountDatabase'
+import { isAccountUnusableError, type AccountUnusableError } from './util/AccountLifecycle'
+import {
+    deriveMobileDeviceIdentity,
+    buildAppUserAgent,
+    extractChromeVersion,
+    type MobileDeviceIdentity
+} from './browser/DeviceIdentity'
+import { resolveGeoProfile } from './browser/GeoProfile'
+import { CLOUDFLARE_TRACE_URL, parseCloudflareTrace, evaluateProxyIdentity } from './util/ProxyVerify'
 
 import { Login } from './browser/auth/Login'
 import { Workers } from './functions/Workers'
@@ -104,6 +114,13 @@ export class MicrosoftRewardsBot {
     public reactSnapshot: PageSnapshot | null = null
 
     public accessToken = ''
+    // Stable per-account Android device identity; drives the browser UA and every
+    // app/platform call so one account == one consistent phone. Set per account
+    // in runTasks (see deriveMobileDeviceIdentity).
+    public mobileDevice: MobileDeviceIdentity = deriveMobileDeviceIdentity({ email: 'default', accountId: undefined })
+    // Bing Sapphire (Android) app user-agent for the current account, aligned to
+    // the browser session's Chromium version. Computed once per account in Main.
+    public appUserAgent = ''
     public cookies: { mobile: Cookie[]; desktop: Cookie[] }
     private fingerprintMobile?: BrowserFingerprintWithHeaders
     private fingerprintDesktop?: BrowserFingerprintWithHeaders
@@ -339,8 +356,11 @@ export class MicrosoftRewardsBot {
             const accountStartTime = Date.now()
             const accountEmail = account.email
             this.userData.userName = this.utils.getEmailUsername(accountEmail)
-            this.userData.timezoneOffset = String(new Date().getTimezoneOffset())
+            this.userData.timezoneOffset = this.accountTimezoneOffset(account)
             this.userData.langCode = account.langCode ?? 'en'
+            // Lock in this account's stable device identity for the whole run.
+            this.mobileDevice = deriveMobileDeviceIdentity(account)
+            this.appUserAgent = ''
 
             try {
                 this.logger.info(
@@ -357,16 +377,21 @@ export class MicrosoftRewardsBot {
                         'PROXY',
                         'Proxy route verified for account; direct HTTP fallback is disabled'
                     )
+                    await this.verifyProxyIdentity(account)
                 }
 
                 const result: { initialPoints: number; collectedPoints: number } | undefined = await this.Main(
                     account
-                ).catch(error => {
-                    void this.logger.error(
-                        true,
-                        'FLOW',
-                        `Mobile flow failed for ${accountEmail}: ${error instanceof Error ? error.message : String(error)}`
-                    )
+                ).catch(async error => {
+                    if (isAccountUnusableError(error)) {
+                        await this.handleUnusableAccount(account, error)
+                    } else {
+                        void this.logger.error(
+                            true,
+                            'FLOW',
+                            `Mobile flow failed for ${accountEmail}: ${error instanceof Error ? error.message : String(error)}`
+                        )
+                    }
                     return undefined
                 })
 
@@ -443,6 +468,132 @@ export class MicrosoftRewardsBot {
         return accountStats
     }
 
+    /**
+     * Verifies the proxy's REAL exit identity by tracing through it, then compares
+     * the observed exit IP/country against the account's expectations. Catches
+     * transparent, rotating, or wrong-country proxies before the account runs.
+     * Behaviour on mismatch is governed by config.proxy.onProxyMismatch.
+     */
+    private async verifyProxyIdentity(account: Account): Promise<void> {
+        const cfg = this.config.proxy
+        if (!cfg?.verifyExitIp || !this.http.usesProxy) return
+
+        let observedIp: string | undefined
+        let observedCountry: string | undefined
+        try {
+            const res = await this.http.request<string>({
+                url: CLOUDFLARE_TRACE_URL,
+                method: 'GET',
+                responseType: 'text',
+                timeout: 12000
+            })
+            const trace = parseCloudflareTrace(String(res.data))
+            observedIp = trace.ip
+            observedCountry = trace.country
+        } catch (error) {
+            // A probe failure alone isn't proof of a bad proxy (assertProxyReady
+            // already validated reachability) — warn and continue.
+            this.logger.warn(
+                'main',
+                'PROXY-VERIFY',
+                `Could not probe proxy exit identity, skipping check: ${error instanceof Error ? error.message : String(error)}`
+            )
+            return
+        }
+
+        const expectedCountry =
+            account.geoLocale && account.geoLocale.toLowerCase() !== 'auto' ? account.geoLocale : undefined
+        const expectedIp = account.proxy.expectedEgressIp?.trim() || undefined
+
+        const { mismatches } = evaluateProxyIdentity({ observedIp, observedCountry, expectedCountry, expectedIp })
+
+        this.logger.info(
+            'main',
+            'PROXY-VERIFY',
+            `Proxy exit | ip=${observedIp ?? '?'} | country=${observedCountry ?? '?'} | expectedCountry=${expectedCountry?.toUpperCase() ?? 'n/a'}${expectedIp ? ` | expectedIp=${expectedIp}` : ''}`
+        )
+
+        if (!mismatches.length) return
+
+        const mode = cfg.onProxyMismatch ?? 'warn'
+        const message = `Proxy identity mismatch for ${account.email}: ${mismatches.join('; ')}`
+        if (mode === 'skip') {
+            this.logger.error('main', 'PROXY-VERIFY', `${message} — skipping this account (proxy.onProxyMismatch=skip)`)
+            throw new Error(message)
+        }
+        if (mode === 'warn') {
+            this.logger.warn(
+                'main',
+                'PROXY-VERIFY',
+                `${message} — continuing (set proxy.onProxyMismatch=skip to enforce)`
+            )
+        }
+        // 'off' → observed exit already logged; take no further action
+    }
+
+    /**
+     * The Rewards API `timezoneOffset` (sent in many activity payloads) must
+     * reflect the account's country, not the host clock. Falls back to the host
+     * offset when the country is unknown ('auto' before login / unsupported).
+     */
+    private accountTimezoneOffset(account: Account, resolvedCountry?: string): string {
+        const seed = account.accountId?.trim() || account.email?.trim().toLowerCase() || 'default'
+        const country =
+            resolvedCountry ??
+            (account.geoLocale && account.geoLocale.toLowerCase() !== 'auto' ? account.geoLocale : undefined)
+        const geo = resolveGeoProfile(country, seed)
+        return geo ? String(geo.timezoneOffsetMinutes) : String(new Date().getTimezoneOffset())
+    }
+
+    /**
+     * Reacts to an account Microsoft reports as unusable (suspended/banned).
+     * Depending on config.accountLifecycle it persists a 'disabled' status (or
+     * hard-deletes the row) so the dead account is not re-attacked next run.
+     * An 'error' level log doubles as the webhook alert.
+     */
+    private async handleUnusableAccount(account: Account, error: AccountUnusableError): Promise<void> {
+        const email = account.email
+        this.logger.error('main', 'ACCOUNT-UNUSABLE', `${email} is ${error.reason} | ${error.message}`)
+
+        const lifecycle = this.config.accountLifecycle
+        if (!lifecycle?.autoDisableSuspended || lifecycle.mode === 'off') {
+            this.logger.warn(
+                'main',
+                'ACCOUNT-LIFECYCLE',
+                `Auto-disable is off; ${email} will be retried next run (set accountLifecycle.mode in config.json to 'disable' or 'delete')`
+            )
+            return
+        }
+
+        try {
+            const result = disableAccountInDatabase(getProjectRoot(), email, lifecycle.mode)
+            if (result.persisted) {
+                this.logger.info(
+                    'main',
+                    'ACCOUNT-LIFECYCLE',
+                    result.mode === 'delete'
+                        ? `Deleted ${email} from the accounts database and blocked re-import (reason: ${error.reason})`
+                        : `Disabled ${email} in the accounts database; skipped on future runs (reason: ${error.reason})`,
+                    'yellow'
+                )
+            } else if (!result.inDatabase) {
+                this.logger.warn(
+                    'main',
+                    'ACCOUNT-LIFECYCLE',
+                    `${email} is not stored in the accounts database (env-sourced?); cannot auto-${lifecycle.mode} — remove it manually`
+                )
+            } else {
+                this.logger.debug('main', 'ACCOUNT-LIFECYCLE', `${email} was already disabled in the database`)
+            }
+        } catch (dbError) {
+            this.logger.error(
+                'main',
+                'ACCOUNT-LIFECYCLE',
+                `Failed to persist unusable status for ${email}: ${dbError instanceof Error ? dbError.message : String(dbError)}`
+            )
+        }
+    }
+
     async createDesktopSession(account: Account): Promise<BrowserSession> {
         const session = await this.browserFactory.createBrowser(account)
         try {
@@ -469,7 +620,7 @@ export class MicrosoftRewardsBot {
     async checkAccountPoints(account: Account): Promise<PointCheckResult> {
         const accountEmail = account.email
         this.userData.userName = this.utils.getEmailUsername(accountEmail)
-        this.userData.timezoneOffset = String(new Date().getTimezoneOffset())
+        this.userData.timezoneOffset = this.accountTimezoneOffset(account)
         this.userData.langCode = account.langCode ?? 'en'
         this.browser.func.resetHttpJars()
 
@@ -549,8 +700,36 @@ export class MicrosoftRewardsBot {
                 this.cookies.mobile = await initialContext.cookies()
                 this.fingerprintMobile = mobileSession.fingerprint
 
+                // Align the app (Bing Sapphire Android) user-agent with the same
+                // device + Chromium version the browser session reports.
+                this.appUserAgent = buildAppUserAgent(
+                    this.mobileDevice,
+                    extractChromeVersion(mobileSession.fingerprint.fingerprint.navigator.userAgent)
+                )
+                this.logger.debug('main', 'DEVICE-IDENTITY', `App UA: ${this.appUserAgent}`)
+
                 const data: DashboardData = await this.browser.func.getDashboardData()
-                const appData: AppDashboardData = await this.browser.func.getAppDashboardData()
+
+                // The app/platform endpoints require a valid mobile OAuth token.
+                // A transient token failure must only disable the app-reward path,
+                // never abort the whole mobile run (which also does browser searches).
+                let appData: AppDashboardData | null = null
+                if (this.accessToken) {
+                    appData = await this.browser.func.getAppDashboardData().catch(error => {
+                        this.logger.warn(
+                            'main',
+                            'FLOW',
+                            `App dashboard unavailable; app rewards will be skipped: ${error instanceof Error ? error.message : String(error)}`
+                        )
+                        return null
+                    })
+                } else {
+                    this.logger.warn(
+                        'main',
+                        'FLOW',
+                        'Mobile access token missing; skipping app dashboard and app promotions for this account'
+                    )
+                }
                 void appData
 
                 this.userData.geoLocale =
@@ -565,12 +744,26 @@ export class MicrosoftRewardsBot {
                     )
                 }
 
+                // Now that the account's country is known, re-derive the Rewards API
+                // timezoneOffset from it (covers 'auto' accounts whose country was
+                // only revealed by the dashboard).
+                this.userData.timezoneOffset = this.accountTimezoneOffset(account, this.userData.geoLocale)
+
                 this.userData.initialPoints = data.dashboard.userStatus.availablePoints
                 this.userData.currentPoints = data.dashboard.userStatus.availablePoints
                 const initialPoints = this.userData.initialPoints ?? 0
 
                 const browserEarnable = await this.browser.func.getBrowserEarnablePoints()
-                const appEarnable = await this.browser.func.getAppEarnablePoints()
+                const appEarnable = this.accessToken
+                    ? await this.browser.func.getAppEarnablePoints().catch(error => {
+                          this.logger.warn(
+                              'main',
+                              'FLOW',
+                              `App earnable points unavailable: ${error instanceof Error ? error.message : String(error)}`
+                          )
+                          return null
+                      })
+                    : null
 
                 const pointsCanCollect = browserEarnable.mobileSearchPoints + (appEarnable?.totalEarnablePoints ?? 0)
 

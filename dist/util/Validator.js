@@ -106,8 +106,16 @@ exports.ConfigSchema = zod_1.z.object({
         .default({ apiSearch: false, apiSearchOnBing: false }),
     debugLogs: zod_1.z.boolean(),
     proxy: zod_1.z.object({
-        queryEngine: zod_1.z.boolean()
+        queryEngine: zod_1.z.boolean(),
+        verifyExitIp: zod_1.z.boolean().default(true),
+        onProxyMismatch: zod_1.z.enum(['warn', 'skip', 'off']).default('warn')
     }),
+    accountLifecycle: zod_1.z
+        .object({
+        autoDisableSuspended: zod_1.z.boolean().default(true),
+        mode: zod_1.z.enum(['off', 'disable', 'delete']).default('disable')
+    })
+        .default({ autoDisableSuspended: true, mode: 'disable' }),
     consoleLogFilter: LogFilterSchema,
     webhook: WebhookSchema
 });
@@ -115,6 +123,7 @@ exports.ConfigSchema = zod_1.z.object({
 exports.AccountSchema = zod_1.z.object({
     accountId: zod_1.z.string().optional(),
     proxyId: zod_1.z.string().nullable().optional(),
+    useProxy: zod_1.z.boolean().optional(),
     status: zod_1.z.string().optional(),
     slot: zod_1.z.number().int().positive().optional(),
     email: zod_1.z.string(),
@@ -128,7 +137,8 @@ exports.AccountSchema = zod_1.z.object({
         url: zod_1.z.string(),
         port: zod_1.z.number(),
         password: zod_1.z.string(),
-        username: zod_1.z.string()
+        username: zod_1.z.string(),
+        expectedEgressIp: zod_1.z.string().optional()
     }),
     saveFingerprint: zod_1.z.object({
         mobile: zod_1.z.boolean(),
@@ -179,7 +189,8 @@ const defaultConfig = {
         apiSearchOnBing: false
     },
     debugLogs: false,
-    proxy: { queryEngine: true },
+    proxy: { queryEngine: true, verifyExitIp: true, onProxyMismatch: 'warn' },
+    accountLifecycle: { autoDisableSuspended: true, mode: 'disable' },
     consoleLogFilter: {
         enabled: false,
         mode: 'whitelist',

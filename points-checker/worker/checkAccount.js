@@ -10,7 +10,18 @@ function classifyError(error) {
   const message = String(error?.message || error || "Unknown point-check error");
   const lower = message.toLowerCase();
   let code = "error";
-  if (lower.includes("captcha") || lower.includes("funcaptcha")) code = "needs_interaction";
+  // A suspended/locked account is a permanent account state, not a transient
+  // check failure. Give it a dedicated code so the dashboard lists it under its
+  // own "Trạng thái" instead of a generic error. The login flow throws an
+  // AccountUnusableError (reason: suspended) for suspensions; a plain Error is
+  // thrown for locked accounts — cover both structurally and by keyword.
+  if (error?.name === "AccountUnusableError" && (error.reason === "suspended" || error.reason === "locked")) {
+    code = error.reason;
+  } else if (lower.includes("suspend")) {
+    code = "suspended";
+  } else if (lower.includes("has been locked") || lower.includes("account is locked") || lower.includes("account locked")) {
+    code = "locked";
+  } else if (lower.includes("captcha") || lower.includes("funcaptcha")) code = "needs_interaction";
   else if (lower.includes("number matching") || lower.includes("approval")) code = "needs_interaction";
   else if (lower.includes("authentication") || lower.includes("login")) code = "auth_required";
   else if (lower.includes("429") || lower.includes("rate limit")) code = "rate_limited";
@@ -34,7 +45,11 @@ async function main() {
   process.stdout.write(`${RESULT_PREFIX}${JSON.stringify(result)}\n`);
 }
 
-main().catch(error => {
-  process.stdout.write(`${ERROR_PREFIX}${JSON.stringify(classifyError(error))}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    process.stdout.write(`${ERROR_PREFIX}${JSON.stringify(classifyError(error))}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { classifyError };

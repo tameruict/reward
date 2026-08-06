@@ -106,8 +106,16 @@ export const ConfigSchema = z.object({
         .default({ apiSearch: false, apiSearchOnBing: false }),
     debugLogs: z.boolean(),
     proxy: z.object({
-        queryEngine: z.boolean()
+        queryEngine: z.boolean(),
+        verifyExitIp: z.boolean().default(true),
+        onProxyMismatch: z.enum(['warn', 'skip', 'off']).default('warn')
     }),
+    accountLifecycle: z
+        .object({
+            autoDisableSuspended: z.boolean().default(true),
+            mode: z.enum(['off', 'disable', 'delete']).default('disable')
+        })
+        .default({ autoDisableSuspended: true, mode: 'disable' }),
     consoleLogFilter: LogFilterSchema,
     webhook: WebhookSchema
 })
@@ -116,6 +124,7 @@ export const ConfigSchema = z.object({
 export const AccountSchema = z.object({
     accountId: z.string().optional(),
     proxyId: z.string().nullable().optional(),
+    useProxy: z.boolean().optional(),
     status: z.string().optional(),
     slot: z.number().int().positive().optional(),
     email: z.string(),
@@ -129,7 +138,8 @@ export const AccountSchema = z.object({
         url: z.string(),
         port: z.number(),
         password: z.string(),
-        username: z.string()
+        username: z.string(),
+        expectedEgressIp: z.string().optional()
     }),
     saveFingerprint: z.object({
         mobile: z.boolean(),
@@ -181,7 +191,8 @@ const defaultConfig: Config = {
         apiSearchOnBing: false
     },
     debugLogs: false,
-    proxy: { queryEngine: true },
+    proxy: { queryEngine: true, verifyExitIp: true, onProxyMismatch: 'warn' },
+    accountLifecycle: { autoDisableSuspended: true, mode: 'disable' },
     consoleLogFilter: {
         enabled: false,
         mode: 'whitelist',

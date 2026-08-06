@@ -7,92 +7,14 @@ import type { MicrosoftRewardsBot } from '../index'
 export class UserAgentManager {
     private static readonly NOT_A_BRAND_VERSION = '99'
 
-    private static readonly MOBILE_MODELS = [
-        // Samsung Galaxy S series
-        'SM-S948B', // Galaxy S26 Ultra
-        'SM-S947B', // Galaxy S26+
-        'SM-S942B', // Galaxy S26
-        'SM-S938B', // Galaxy S25 Ultra
-        'SM-S937B', // Galaxy S25 Edge
-        'SM-S936B', // Galaxy S25+
-        'SM-S931B', // Galaxy S25
-        'SM-S928B', // Galaxy S24 Ultra
-        'SM-S926B', // Galaxy S24+
-        'SM-S921B', // Galaxy S24
-        'SM-S918B', // Galaxy S23 Ultra
-        'SM-S916B', // Galaxy S23+
-        'SM-S911B', // Galaxy S23
-
-        // Samsung Galaxy Z series
-        'SM-F966B', // Galaxy Z Fold7
-        'SM-F956B', // Galaxy Z Fold6
-        'SM-F946B', // Galaxy Z Fold5
-        'SM-F741B', // Galaxy Z Flip6
-        'SM-F731B', // Galaxy Z Flip5
-
-        // Samsung
-        'SM-A566B', // Galaxy A56 5G
-        'SM-A556B', // Galaxy A55 5G
-        'SM-A546B', // Galaxy A54 5G
-        'SM-A356B', // Galaxy A35 5G
-        'SM-A346B', // Galaxy A34 5G
-        'SM-A266B', // Galaxy A26 5G
-        'SM-A256B', // Galaxy A25 5G
-        'SM-A166B', // Galaxy A16 5G
-        'SM-A156B', // Galaxy A15 5G
-
-        // Google Pixel
-        'Pixel 10 Pro Fold',
-        'Pixel 10 Pro XL',
-        'Pixel 10 Pro',
-        'Pixel 10',
-        'Pixel 10a',
-        'Pixel 9 Pro Fold',
-        'Pixel 9 Pro XL',
-        'Pixel 9 Pro',
-        'Pixel 9',
-        'Pixel 9a',
-        'Pixel 8 Pro',
-        'Pixel 8',
-        'Pixel 8a',
-        'Pixel 7 Pro',
-        'Pixel 7',
-        'Pixel 7a',
-        'Pixel Fold',
-
-        // OnePlus
-        'CPH2653', // OnePlus 13
-        'CPH2649', // OnePlus 13
-        'CPH2655', // OnePlus 13
-        'CPH2581', // OnePlus 12
-        'CPH2573', // OnePlus 12
-        'CPH2449', // OnePlus 11
-        'CPH2415', // OnePlus 10T
-
-        // Nothing
-        'A059', // Nothing Phone (3a)
-        'A059P', // Nothing Phone (3a) Pro
-        'A142', // Nothing Phone (2a)
-        'A065', // Nothing Phone (2)
-
-        // Motorola
-        'motorola edge 50 pro',
-        'motorola edge 50 neo',
-        'motorola edge 40 pro',
-        'moto g85 5G',
-        'moto g84 5G',
-        'moto g54 5G'
-    ]
-
     constructor(private bot: MicrosoftRewardsBot) {}
 
-    private static pickMobileModel(): string {
-        const pool = UserAgentManager.MOBILE_MODELS
-        return pool[Math.floor(Math.random() * pool.length)] ?? 'Pixel 8'
-    }
-
     async getUserAgent(isMobile: boolean) {
-        const androidVersion = isMobile ? 10 + Math.floor(Math.random() * 6) : 0 // Android 10-15
+        // Mobile device (model + Android version) is derived deterministically
+        // per account, so the browser UA stays stable across runs and matches
+        // the app-call user-agent for the same account.
+        const device = this.bot.mobileDevice
+        const androidVersion = isMobile ? device.androidVersion : 0
         const system = this.getSystemComponents(isMobile, androidVersion)
         const app = await this.getAppComponents(isMobile)
 
@@ -106,7 +28,7 @@ export class UserAgentManager {
         const desktopPlatform =
             process.platform === 'darwin' ? 'macOS' : process.platform === 'linux' ? 'Linux' : 'Windows'
 
-        const model = isMobile ? UserAgentManager.pickMobileModel() : ''
+        const model = isMobile ? device.model : ''
 
         const uaMetadata = {
             isMobile,

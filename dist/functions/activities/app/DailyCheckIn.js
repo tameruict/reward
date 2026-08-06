@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DailyCheckIn = void 0;
 const urls_1 = require("../../../constants/urls");
+const DeviceIdentity_1 = require("../../../browser/DeviceIdentity");
 const crypto_1 = require("crypto");
 const Workers_1 = require("../../Workers");
 class DailyCheckIn extends Workers_1.Workers {
@@ -38,7 +39,7 @@ class DailyCheckIn extends Workers_1.Workers {
             const jsonData = {
                 risk_context: {},
                 type: 103,
-                channel: 'SAIOS',
+                channel: this.bot.mobileDevice.channel,
                 attributes: {},
                 id: (0, crypto_1.randomUUID)(),
                 amount: 1,
@@ -48,18 +49,14 @@ class DailyCheckIn extends Workers_1.Workers {
             const request = {
                 url: urls_1.URLs.platform.activities,
                 method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'Content-Type': 'application/json',
-                    Accept: '*/*',
-                    'User-Agent': 'Mozilla/5.0 (iPad; CPU iPad OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/605.1.15 BingSapphire/33.4.440603001',
-                    'X-Rewards-AppId': 'SAIOS/33.4.440603001',
-                    'X-Rewards-PartnerId': 'startapp',
-                    'X-Rewards-Country': this.bot.userData.geoLocale,
-                    'X-Rewards-Language': 'en',
-                    'X-Rewards-Flights': 'rwgobig',
-                    'X-Rewards-IsMobile': 'true'
-                },
+                headers: (0, DeviceIdentity_1.buildAppHeaders)({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent,
+                    extra: { 'Content-Type': 'application/json' }
+                }),
                 data: JSON.stringify(jsonData)
             };
             this.bot.logger.debug(this.bot.isMobile, 'DAILY-CHECK-IN', `Sending Daily Check-In request | type=${jsonData.type} | url=${request.url}`);

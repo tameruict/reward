@@ -10,6 +10,7 @@ const node_net_1 = __importDefault(require("node:net"));
 const SessionStore_1 = require("../util/SessionStore");
 const ProxyConfig_1 = require("../util/ProxyConfig");
 const UserAgent_1 = require("./UserAgent");
+const GeoProfile_1 = require("./GeoProfile");
 class Browser {
     bot;
     static BROWSER_ARGS = [
@@ -25,15 +26,21 @@ class Browser {
         '--disable-background-networking',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        '--disable-component-update'
+        '--disable-component-update',
+        // WebRTC IP-leak protection at the network layer. `disable_non_proxied_udp`
+        // forces ICE to use only the proxied path, so STUN/ICE never gathers the
+        // machine's real local/public IP — while the WebRTC API stays present and
+        // native (deleting RTCPeerConnection is itself a detectable bot tell).
+        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--enforce-webrtc-ip-permission-check'
     ];
     constructor(bot) {
         this.bot = bot;
     }
     async createBrowser(account) {
         const headless = this.bot.config.headless;
-        const hasProxy = Boolean(account.proxy.url);
-        if (!hasProxy || Number(account.proxy.port) <= 0) {
+        const hasProxy = Boolean(account.proxy.url) && Number(account.proxy.port) > 0;
+        if (account.useProxy !== false && !hasProxy) {
             throw new Error(`Refusing to launch browser for ${account.email}: a valid account proxy is required and direct traffic is disabled`);
         }
         let browser;
@@ -41,8 +48,16 @@ class Browser {
             if (hasProxy) {
                 await this.assertProxyReachable(account.proxy);
             }
-            const parsedProxy = (0, ProxyConfig_1.parseProxyConfig)(account.proxy);
-            const proxyConfig = account.proxy.url
+            const parsedProxy = hasProxy ? (0, ProxyConfig_1.parseProxyConfig)(account.proxy) : null;
+            // Chromium silently IGNORES SOCKS proxy credentials — an authenticated
+            // SOCKS proxy would connect WITHOUT auth (leaking the real IP or failing),
+            // even though the Impit health gate accepts SOCKS auth. Refuse rather than
+            // launch into that mismatch.
+            const isSocks = parsedProxy?.protocol === 'socks4' || parsedProxy?.protocol === 'socks5';
+            if (isSocks && parsedProxy?.username && parsedProxy.password) {
+                throw new Error(`Refusing to launch browser for ${account.email}: Chromium cannot use authenticated ${parsedProxy.protocol} proxies (it ignores SOCKS credentials). Use an http(s) proxy for authenticated proxies, or an IP-whitelisted SOCKS proxy without username/password.`);
+            }
+            const proxyConfig = parsedProxy
                 ? {
                     server: parsedProxy.server,
                     ...(parsedProxy.username &&
@@ -73,14 +88,31 @@ class Browser {
             const shouldUseFingerprint = this.bot.isMobile
                 ? account.saveFingerprint.mobile
                 : account.saveFingerprint.desktop;
-            const fingerprint = (shouldUseFingerprint && session?.fingerprint) || (await this.generateFingerprint(this.bot.isMobile));
+            // Align timezone/locale/geolocation with the account's country (which must
+            // match the proxy exit country). Derived offline, stable per account.
+            const geo = this.resolveGeo(account);
+            const fingerprint = (shouldUseFingerprint && session?.fingerprint) ||
+                (await this.generateFingerprint(this.bot.isMobile, geo?.locale));
             const screen = fingerprint.fingerprint.screen;
             //@ts-expect-error It doesn't like the browser instance from different packages
             const injected = await (0, fingerprint_injector_1.newInjectedContext)(browser, {
                 fingerprint,
                 newContextOptions: {
-                    permissions: [],
+                    // Grant geolocation up-front so it can be aligned (and, for 'auto'
+                    // accounts, updated after the dashboard reveals the country).
+                    permissions: geo ? ['geolocation'] : [],
                     ignoreHTTPSErrors: hasProxy,
+                    ...(geo
+                        ? {
+                            locale: geo.locale,
+                            timezoneId: geo.timezoneId,
+                            geolocation: {
+                                latitude: geo.latitude,
+                                longitude: geo.longitude,
+                                accuracy: geo.accuracy
+                            }
+                        }
+                        : {}),
                     // Restore cookies
                     ...(session?.storageState ? { storageState: session.storageState } : {}),
                     ...(this.bot.isMobile
@@ -118,13 +150,10 @@ class Browser {
                     }
                 }
                 catch { }
-                // Block WebRTC so the real ip can't leak past the proxy
-                // @ts-expect-error Removing since it might potentionally, kinda unsurely leak the machine's details to browser
-                delete window.RTCPeerConnection;
-                // @ts-expect-error Same as above
-                delete window.webkitRTCPeerConnection;
-                // @ts-expect-error if you read this, Netsky was here struggling :(
-                delete window.RTCDataChannel;
+                // NOTE: WebRTC real-IP leaks are prevented at the network layer via
+                // the --force-webrtc-ip-handling-policy=disable_non_proxied_udp launch
+                // flag (see BROWSER_ARGS). The RTCPeerConnection API is deliberately
+                // left intact so the browser still looks like a normal Chromium.
             });
             context.on('page', p => {
                 p.on('crash', () => this.bot.logger.error(this.bot.isMobile, 'BROWSER', `Renderer crashed | ${p.url()}`));
@@ -138,6 +167,12 @@ class Browser {
                 (0, SessionStore_1.saveFingerprint)(this.bot.config.sessionPath, account.email, this.bot.isMobile, fingerprint);
             }
             this.bot.logger.info(this.bot.isMobile, 'BROWSER', `Created context | User-Agent: "${fingerprint.fingerprint.navigator.userAgent}"`);
+            if (geo) {
+                this.bot.logger.info(this.bot.isMobile, 'BROWSER-GEO', `Aligned to ${geo.country} | tz=${geo.timezoneId} (offset ${geo.timezoneOffsetMinutes}m) | locale=${geo.locale} | geo=${geo.latitude},${geo.longitude}`);
+            }
+            else if (account.geoLocale?.toLowerCase() === 'auto') {
+                this.bot.logger.debug(this.bot.isMobile, 'BROWSER-GEO', 'geoLocale=auto: JS timezone/locale not emulated pre-login. Set an explicit 2-letter country per account (matching the proxy) for full alignment.');
+            }
             this.bot.logger.debug(this.bot.isMobile, 'BROWSER-FINGERPRINT', JSON.stringify(fingerprint));
             return { context, fingerprint };
         }
@@ -169,12 +204,19 @@ class Browser {
             });
         });
     }
-    async generateFingerprint(isMobile) {
+    resolveGeo(account) {
+        const seed = account.accountId?.trim() || account.email?.trim().toLowerCase() || 'default';
+        const country = account.geoLocale && account.geoLocale.toLowerCase() !== 'auto' ? account.geoLocale : undefined;
+        return (0, GeoProfile_1.resolveGeoProfile)(country, seed);
+    }
+    async generateFingerprint(isMobile, locale) {
         const hostOs = process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'windows';
         const fingerPrintData = new fingerprint_generator_1.FingerprintGenerator().getFingerprint({
             devices: isMobile ? ['mobile'] : ['desktop'],
             operatingSystems: isMobile ? ['android'] : [hostOs],
-            browsers: [{ name: 'edge' }]
+            browsers: [{ name: 'edge' }],
+            // Align Accept-Language / navigator.languages with the proxy country.
+            ...(locale ? { locales: [locale, locale.split('-')[0] ?? locale] } : {})
         });
         const userAgentManager = new UserAgent_1.UserAgentManager(this.bot);
         return await userAgentManager.updateFingerprintUserAgent(fingerPrintData, isMobile);

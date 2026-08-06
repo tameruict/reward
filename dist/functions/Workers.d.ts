@@ -7,7 +7,7 @@ export declare class Workers {
     constructor(bot: MicrosoftRewardsBot);
     doDailySet(data: DashboardData): Promise<void>;
     doMorePromotions(data: DashboardData): Promise<void>;
-    doAppPromotions(data: AppDashboardData): Promise<void>;
+    doAppPromotions(data: AppDashboardData | null): Promise<void>;
     doPunchCards(data: DashboardData, page: Page): Promise<void>;
     doClaimBonusPoints(): Promise<void>;
     private solvePunchCard;

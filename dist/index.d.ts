@@ -7,6 +7,7 @@ import ReactFunc from './browser/ReactFunc';
 import type { PageSnapshot } from './browser/ReactFunc';
 import { Logger } from './logging/Logger';
 import Utils from './util/Utils';
+import { type MobileDeviceIdentity } from './browser/DeviceIdentity';
 import { Workers } from './functions/Workers';
 import Activities from './functions/Activities';
 import type { Account } from './interface/Account';
@@ -56,6 +57,8 @@ export declare class MicrosoftRewardsBot {
     nextRouterStateTree: string;
     reactSnapshot: PageSnapshot | null;
     accessToken: string;
+    mobileDevice: MobileDeviceIdentity;
+    appUserAgent: string;
     cookies: {
         mobile: Cookie[];
         desktop: Cookie[];
@@ -81,6 +84,26 @@ export declare class MicrosoftRewardsBot {
     private runMaster;
     private runWorker;
     private runTasks;
+    /**
+     * Verifies the proxy's REAL exit identity by tracing through it, then compares
+     * the observed exit IP/country against the account's expectations. Catches
+     * transparent, rotating, or wrong-country proxies before the account runs.
+     * Behaviour on mismatch is governed by config.proxy.onProxyMismatch.
+     */
+    private verifyProxyIdentity;
+    /**
+     * The Rewards API `timezoneOffset` (sent in many activity payloads) must
+     * reflect the account's country, not the host clock. Falls back to the host
+     * offset when the country is unknown ('auto' before login / unsupported).
+     */
+    private accountTimezoneOffset;
+    /**
+     * Reacts to an account Microsoft reports as unusable (suspended/banned).
+     * Depending on config.accountLifecycle it persists a 'disabled' status (or
+     * hard-deletes the row) so the dead account is not re-attacked next run.
+     * An 'error' level log doubles as the webhook alert.
+     */
+    private handleUnusableAccount;
     createDesktopSession(account: Account): Promise<BrowserSession>;
     /**
      * Authenticate one account and read its Rewards balance only.

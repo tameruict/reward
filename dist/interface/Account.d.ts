@@ -1,6 +1,7 @@
 export interface Account {
     accountId?: string;
     proxyId?: string | null;
+    useProxy?: boolean;
     status?: 'ready' | 'active' | 'disabled' | 'running' | 'error' | 'cooldown' | string;
     slot?: number;
     email: string;
@@ -18,6 +19,8 @@ export interface AccountProxy {
     port: number;
     password: string;
     username: string;
+    /** Optional expected exit IP for this proxy (from the DB), used to detect rotation/transparency. */
+    expectedEgressIp?: string;
 }
 export interface ConfigSaveFingerprint {
     mobile: boolean;

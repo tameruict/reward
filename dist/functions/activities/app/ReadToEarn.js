@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ReadToEarn = void 0;
 const urls_1 = require("../../../constants/urls");
-const userAgents_1 = require("../../../constants/userAgents");
+const DeviceIdentity_1 = require("../../../browser/DeviceIdentity");
 const crypto_1 = require("crypto");
 const Workers_1 = require("../../Workers");
 class ReadToEarn extends Workers_1.Workers {
@@ -35,14 +35,14 @@ class ReadToEarn extends Workers_1.Workers {
                 const request = {
                     url: urls_1.URLs.platform.activities,
                     method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${this.bot.accessToken}`,
-                        'User-Agent': userAgents_1.BING_APP_USER_AGENT,
-                        'Content-Type': 'application/json',
-                        'X-Rewards-Country': this.bot.userData.geoLocale,
-                        'X-Rewards-Language': 'en',
-                        'X-Rewards-ismobile': 'true'
-                    },
+                    headers: (0, DeviceIdentity_1.buildAppHeaders)({
+                        accessToken: this.bot.accessToken,
+                        geoLocale: this.bot.userData.geoLocale,
+                        langCode: this.bot.userData.langCode,
+                        device: this.bot.mobileDevice,
+                        appUserAgent: this.bot.appUserAgent,
+                        extra: { 'Content-Type': 'application/json' }
+                    }),
                     data: JSON.stringify(jsonData)
                 };
                 const response = await this.bot.http.request(request);

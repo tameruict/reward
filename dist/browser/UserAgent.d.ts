@@ -3,9 +3,7 @@ import type { MicrosoftRewardsBot } from '../index';
 export declare class UserAgentManager {
     private bot;
     private static readonly NOT_A_BRAND_VERSION;
-    private static readonly MOBILE_MODELS;
     constructor(bot: MicrosoftRewardsBot);
-    private static pickMobileModel;
     getUserAgent(isMobile: boolean): Promise<{
         userAgent: string;
         userAgentMetadata: {

@@ -48,6 +48,11 @@ export async function sendDiscord(discordUrl: string, content: string, level: Lo
         } catch (err) {
             const status = (err as { response?: { status?: number } })?.response?.status
             if (status === 429) return
+            // Surface delivery failures (e.g. revoked/invalid webhook URL) instead
+            // of silently dropping them — otherwise alerts go invisibly to zero.
+            console.warn(
+                `[Webhook:Discord] delivery failed${status ? ` (HTTP ${status})` : ''}: ${err instanceof Error ? err.message : String(err)}`
+            )
         }
     })
 }

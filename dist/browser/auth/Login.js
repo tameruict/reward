@@ -12,6 +12,7 @@ const GetACodeLogin_1 = require("./methods/GetACodeLogin");
 const RecoveryEmailLogin_1 = require("./methods/RecoveryEmailLogin");
 const FuncaptchaLogin_1 = require("./methods/FuncaptchaLogin");
 const BrowserFunc_1 = require("../BrowserFunc");
+const AccountLifecycle_1 = require("../../util/AccountLifecycle");
 class Login {
     bot;
     emailLogin;
@@ -202,7 +203,7 @@ class Login {
                 throw new Error(msg);
             }
             case 'ACCOUNT_SUSPENDED':
-                throw new Error(`Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`);
+                throw new AccountLifecycle_1.AccountUnusableError(account.email, 'suspended', `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`);
             case 'ERROR_ALERT': {
                 const alertEl = page.locator(this.selectors.errorAlert);
                 const errorMsg = await alertEl.innerText().catch(() => 'Unknown Error');
@@ -384,7 +385,7 @@ class Login {
         this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Finalizing login');
         await page.goto(urls_1.REWARDS_BASE_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => { });
         if (await this.bot.browser.utils.checkSuspendedAccount(page, account.email)) {
-            throw new Error(`Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`);
+            throw new AccountLifecycle_1.AccountUnusableError(account.email, 'suspended', `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`);
         }
         this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Rewards landing reached; dashboard verification pending');
         // Dismiss at rewards dashboard
@@ -467,7 +468,7 @@ class Login {
                 }
             }
             if (await this.bot.browser.utils.checkSuspendedAccount(page, account.email)) {
-                throw new Error(`Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`);
+                throw new AccountLifecycle_1.AccountUnusableError(account.email, 'suspended', `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`);
             }
             const actionsCount = Object.keys(this.bot.nextActions).length;
             const snapshot = this.bot.reactSnapshot;

@@ -1,5 +1,5 @@
 import { URLs } from '../../../constants/urls'
-import { BING_APP_USER_AGENT } from '../../../constants/userAgents'
+import { buildAppHeaders } from '../../../browser/DeviceIdentity'
 import type { HttpRequestConfig } from '../../../util/Http'
 import { randomUUID } from 'crypto'
 import type { Promotion } from '../../../interface/AppDashBoardData'
@@ -48,14 +48,14 @@ export class AppReward extends Workers {
             const request: HttpRequestConfig = {
                 url: URLs.platform.activities,
                 method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'User-Agent': BING_APP_USER_AGENT,
-                    'Content-Type': 'application/json',
-                    'X-Rewards-Country': this.bot.userData.geoLocale,
-                    'X-Rewards-Language': 'en',
-                    'X-Rewards-ismobile': 'true'
-                },
+                headers: buildAppHeaders({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent,
+                    extra: { 'Content-Type': 'application/json' }
+                }),
                 data: JSON.stringify(jsonData)
             }
 

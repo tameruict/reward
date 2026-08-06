@@ -12,6 +12,7 @@ import { CodeLogin } from './methods/GetACodeLogin'
 import { RecoveryLogin } from './methods/RecoveryEmailLogin'
 import { FuncaptchaLogin } from './methods/FuncaptchaLogin'
 import { RewardsAuthenticationRequiredError } from '../BrowserFunc'
+import { AccountUnusableError } from '../../util/AccountLifecycle'
 
 import type { Account } from '../../interface/Account'
 
@@ -270,7 +271,9 @@ export class Login {
             }
 
             case 'ACCOUNT_SUSPENDED':
-                throw new Error(
+                throw new AccountUnusableError(
+                    account.email,
+                    'suspended',
                     `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`
                 )
 
@@ -503,7 +506,11 @@ export class Login {
         await page.goto(REWARDS_BASE_URL, { waitUntil: 'networkidle', timeout: 10000 }).catch(() => {})
 
         if (await this.bot.browser.utils.checkSuspendedAccount(page, account.email)) {
-            throw new Error(`Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`)
+            throw new AccountUnusableError(
+                account.email,
+                'suspended',
+                `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`
+            )
         }
 
         this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Rewards landing reached; dashboard verification pending')
@@ -625,7 +632,9 @@ export class Login {
             }
 
             if (await this.bot.browser.utils.checkSuspendedAccount(page, account.email)) {
-                throw new Error(
+                throw new AccountUnusableError(
+                    account.email,
+                    'suspended',
                     `Account cannot be used: ${account.email} | Microsoft Rewards account has been suspended`
                 )
             }

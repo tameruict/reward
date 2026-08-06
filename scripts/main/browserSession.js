@@ -99,7 +99,7 @@ async function main() {
     const userAgent = fingerprint?.fingerprint?.navigator?.userAgent || fingerprint?.fingerprint?.userAgent || null
 
     const proxy = account ? buildProxyConfig(account) : null
-    if (!proxy || !proxy.server) {
+    if (account.useProxy !== false && (!proxy || !proxy.server)) {
         log('ERROR', 'A valid account proxy is required; direct browser sessions are disabled')
         process.exit(1)
     }

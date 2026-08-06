@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveAccountsDbPath = resolveAccountsDbPath;
 exports.ensureAccountsDatabase = ensureAccountsDatabase;
 exports.loadAccountsFromDatabase = loadAccountsFromDatabase;
+exports.disableAccountInDatabase = disableAccountInDatabase;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const node_sqlite_1 = require("node:sqlite");
@@ -54,6 +55,7 @@ function ensureAccountsDatabase(dbPath) {
                 geo_locale TEXT NOT NULL DEFAULT 'auto',
                 lang_code TEXT NOT NULL DEFAULT 'en',
                 proxy_id TEXT REFERENCES proxies(id) ON UPDATE CASCADE ON DELETE SET NULL,
+                use_proxy INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'ready',
                 slot INTEGER,
                 save_fingerprint_mobile INTEGER NOT NULL DEFAULT 1,
@@ -82,6 +84,10 @@ function ensureAccountsDatabase(dbPath) {
         if (!proxyColumns.has('egress_ip')) {
             db.exec('ALTER TABLE proxies ADD COLUMN egress_ip TEXT');
         }
+        const accountColumns = new Set(db.prepare('PRAGMA table_info(accounts)').all().map(row => row.name));
+        if (!accountColumns.has('use_proxy')) {
+            db.exec('ALTER TABLE accounts ADD COLUMN use_proxy INTEGER NOT NULL DEFAULT 1');
+        }
         db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_proxies_identity_key ON proxies(identity_key)');
     }
     finally {
@@ -106,6 +112,7 @@ function loadAccountsFromDatabase(projectRoot) {
                     a.geo_locale,
                     a.lang_code,
                     a.proxy_id,
+                    a.use_proxy,
                     a.status AS account_status,
                     a.slot,
                     a.save_fingerprint_mobile,
@@ -114,7 +121,8 @@ function loadAccountsFromDatabase(projectRoot) {
                     p.url AS proxy_url,
                     p.port AS proxy_port,
                     p.username AS proxy_username,
-                    p.password AS proxy_password
+                    p.password AS proxy_password,
+                    p.egress_ip AS proxy_egress_ip
                 FROM accounts a
                 LEFT JOIN proxies p ON p.id = a.proxy_id
                 WHERE a.status IN ('ready', 'active')
@@ -125,6 +133,7 @@ function loadAccountsFromDatabase(projectRoot) {
         return rows.map(row => ({
             accountId: row.account_id,
             proxyId: row.proxy_id,
+            useProxy: Boolean(row.use_proxy),
             status: row.account_status,
             slot: row.slot ?? undefined,
             email: row.email,
@@ -140,13 +149,67 @@ function loadAccountsFromDatabase(projectRoot) {
                 url: row.proxy_url ?? '',
                 port: row.proxy_port ?? 0,
                 username: row.proxy_username ?? '',
-                password: (0, AccountSecrets_1.decryptAccountSecret)(row.proxy_password, `proxy password for ${row.email}`)
+                password: (0, AccountSecrets_1.decryptAccountSecret)(row.proxy_password, `proxy password for ${row.email}`),
+                expectedEgressIp: row.proxy_egress_ip?.trim() || undefined
             },
             saveFingerprint: {
                 mobile: Boolean(row.save_fingerprint_mobile),
                 desktop: Boolean(row.save_fingerprint_desktop)
             }
         }));
+    }
+    finally {
+        db.close();
+    }
+}
+/**
+ * Marks an account unusable in the accounts DB so it is excluded from every
+ * future run (loadAccountsFromDatabase only returns 'ready'/'active' rows).
+ *
+ * - mode 'disable' (default, reversible): sets status = 'disabled'.
+ * - mode 'delete' (irreversible): removes the row and records the email in
+ *   deleted_accounts so a later import cannot silently re-add it.
+ *
+ * Safe to call for env-sourced accounts: it simply reports inDatabase=false.
+ */
+function disableAccountInDatabase(projectRoot, email, mode) {
+    const normalizedEmail = email.trim();
+    const dbPath = resolveAccountsDbPath(projectRoot);
+    if (!normalizedEmail || !fs_1.default.existsSync(dbPath)) {
+        return { persisted: false, inDatabase: false, mode };
+    }
+    ensureAccountsDatabase(dbPath);
+    const db = new node_sqlite_1.DatabaseSync(dbPath);
+    try {
+        db.exec('PRAGMA busy_timeout = 5000;');
+        const existing = db.prepare('SELECT id FROM accounts WHERE LOWER(email) = LOWER(?)').get(normalizedEmail);
+        if (!existing)
+            return { persisted: false, inDatabase: false, mode };
+        if (mode === 'delete') {
+            db.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+            try {
+                db.prepare(`INSERT INTO deleted_accounts (email, deleted_at)
+                     VALUES (?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(email) DO UPDATE SET deleted_at = excluded.deleted_at`).run(normalizedEmail);
+                const result = db.prepare('DELETE FROM accounts WHERE id = ?').run(existing.id);
+                db.exec('COMMIT');
+                return { persisted: Number(result.changes ?? 0) > 0, inDatabase: true, mode };
+            }
+            catch (error) {
+                try {
+                    db.exec('ROLLBACK');
+                }
+                catch {
+                    /* ignore rollback failure */
+                }
+                throw error;
+            }
+        }
+        const result = db
+            .prepare(`UPDATE accounts SET status = 'disabled', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ? AND status != 'disabled'`)
+            .run(existing.id);
+        return { persisted: Number(result.changes ?? 0) > 0, inDatabase: true, mode };
     }
     finally {
         db.close();

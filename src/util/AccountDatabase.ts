@@ -16,6 +16,7 @@ interface AccountRow {
     geo_locale: string | null
     lang_code: string | null
     proxy_id: string | null
+    use_proxy: number
     account_status: string
     slot: number | null
     save_fingerprint_mobile: number
@@ -25,6 +26,7 @@ interface AccountRow {
     proxy_port: number | null
     proxy_username: string | null
     proxy_password: string | null
+    proxy_egress_ip: string | null
 }
 
 function resolveProjectRelative(projectRoot: string, maybeRelativePath: string): string {
@@ -73,6 +75,7 @@ export function ensureAccountsDatabase(dbPath: string): void {
                 geo_locale TEXT NOT NULL DEFAULT 'auto',
                 lang_code TEXT NOT NULL DEFAULT 'en',
                 proxy_id TEXT REFERENCES proxies(id) ON UPDATE CASCADE ON DELETE SET NULL,
+                use_proxy INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'ready',
                 slot INTEGER,
                 save_fingerprint_mobile INTEGER NOT NULL DEFAULT 1,
@@ -104,6 +107,12 @@ export function ensureAccountsDatabase(dbPath: string): void {
         if (!proxyColumns.has('egress_ip')) {
             db.exec('ALTER TABLE proxies ADD COLUMN egress_ip TEXT')
         }
+        const accountColumns = new Set(
+            (db.prepare('PRAGMA table_info(accounts)').all() as unknown as Array<{ name: string }>).map(row => row.name)
+        )
+        if (!accountColumns.has('use_proxy')) {
+            db.exec('ALTER TABLE accounts ADD COLUMN use_proxy INTEGER NOT NULL DEFAULT 1')
+        }
         db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_proxies_identity_key ON proxies(identity_key)')
     } finally {
         db.close()
@@ -130,6 +139,7 @@ export function loadAccountsFromDatabase(projectRoot: string): Account[] | null 
                     a.geo_locale,
                     a.lang_code,
                     a.proxy_id,
+                    a.use_proxy,
                     a.status AS account_status,
                     a.slot,
                     a.save_fingerprint_mobile,
@@ -138,7 +148,8 @@ export function loadAccountsFromDatabase(projectRoot: string): Account[] | null 
                     p.url AS proxy_url,
                     p.port AS proxy_port,
                     p.username AS proxy_username,
-                    p.password AS proxy_password
+                    p.password AS proxy_password,
+                    p.egress_ip AS proxy_egress_ip
                 FROM accounts a
                 LEFT JOIN proxies p ON p.id = a.proxy_id
                 WHERE a.status IN ('ready', 'active')
@@ -151,6 +162,7 @@ export function loadAccountsFromDatabase(projectRoot: string): Account[] | null 
         return rows.map(row => ({
             accountId: row.account_id,
             proxyId: row.proxy_id,
+            useProxy: Boolean(row.use_proxy),
             status: row.account_status,
             slot: row.slot ?? undefined,
             email: row.email,
@@ -166,13 +178,87 @@ export function loadAccountsFromDatabase(projectRoot: string): Account[] | null 
                 url: row.proxy_url ?? '',
                 port: row.proxy_port ?? 0,
                 username: row.proxy_username ?? '',
-                password: decryptAccountSecret(row.proxy_password, `proxy password for ${row.email}`)
+                password: decryptAccountSecret(row.proxy_password, `proxy password for ${row.email}`),
+                expectedEgressIp: row.proxy_egress_ip?.trim() || undefined
             },
             saveFingerprint: {
                 mobile: Boolean(row.save_fingerprint_mobile),
                 desktop: Boolean(row.save_fingerprint_desktop)
             }
         }))
+    } finally {
+        db.close()
+    }
+}
+
+export type AccountDisableMode = 'disable' | 'delete'
+
+export interface AccountDisableResult {
+    /** true when a row was actually mutated (status flipped or row deleted) */
+    persisted: boolean
+    /** false when the account is not stored in the DB (e.g. env-sourced) */
+    inDatabase: boolean
+    mode: AccountDisableMode
+}
+
+/**
+ * Marks an account unusable in the accounts DB so it is excluded from every
+ * future run (loadAccountsFromDatabase only returns 'ready'/'active' rows).
+ *
+ * - mode 'disable' (default, reversible): sets status = 'disabled'.
+ * - mode 'delete' (irreversible): removes the row and records the email in
+ *   deleted_accounts so a later import cannot silently re-add it.
+ *
+ * Safe to call for env-sourced accounts: it simply reports inDatabase=false.
+ */
+export function disableAccountInDatabase(
+    projectRoot: string,
+    email: string,
+    mode: AccountDisableMode
+): AccountDisableResult {
+    const normalizedEmail = email.trim()
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    if (!normalizedEmail || !fs.existsSync(dbPath)) {
+        return { persisted: false, inDatabase: false, mode }
+    }
+
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath)
+    try {
+        db.exec('PRAGMA busy_timeout = 5000;')
+
+        const existing = db.prepare('SELECT id FROM accounts WHERE LOWER(email) = LOWER(?)').get(normalizedEmail) as
+            { id: string } | undefined
+        if (!existing) return { persisted: false, inDatabase: false, mode }
+
+        if (mode === 'delete') {
+            db.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;')
+            try {
+                db.prepare(
+                    `INSERT INTO deleted_accounts (email, deleted_at)
+                     VALUES (?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(email) DO UPDATE SET deleted_at = excluded.deleted_at`
+                ).run(normalizedEmail)
+                const result = db.prepare('DELETE FROM accounts WHERE id = ?').run(existing.id)
+                db.exec('COMMIT')
+                return { persisted: Number(result.changes ?? 0) > 0, inDatabase: true, mode }
+            } catch (error) {
+                try {
+                    db.exec('ROLLBACK')
+                } catch {
+                    /* ignore rollback failure */
+                }
+                throw error
+            }
+        }
+
+        const result = db
+            .prepare(
+                `UPDATE accounts SET status = 'disabled', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ? AND status != 'disabled'`
+            )
+            .run(existing.id)
+        return { persisted: Number(result.changes ?? 0) > 0, inDatabase: true, mode }
     } finally {
         db.close()
     }

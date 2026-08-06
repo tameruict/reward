@@ -78,6 +78,28 @@ npm run accounts -- list
 
 Rows containing the same proxy URL, port, and username are automatically grouped under one proxy record. The importer also accepts `accounts.txt` blocks with plain `EMAIL=...`, `PASSWORD=...`, and `PROXY_*=...` fields separated by blank lines, plus the normalized JSON format for advanced use.
 
+Pipe-delimited `.txt` files are converted automatically during import. Supported rows are:
+
+```text
+email@example.com|email-password
+email@example.com|email-password|host:port
+email@example.com|email-password|host:port|proxy-user|proxy-password
+email@example.com|email-password|host:port:proxy-user:proxy-password
+```
+
+Rows containing only email and password are distributed evenly across active proxies already stored in the database. A proxy included in the row is created or updated automatically. To intentionally re-import addresses recorded in `deleted_accounts`, add `--restore-deleted`:
+
+```bash
+npm run accounts:import -- ./accounts.local.txt --restore-deleted
+```
+
+To intentionally run imported accounts through the machine's direct connection, use `--no-proxy`. This
+mode ignores proxy columns in the import file and persists direct mode for those accounts:
+
+```bash
+npm run accounts:import -- ./accounts.local.txt --no-proxy
+```
+
 Proxy identity is based on protocol, host, port, and username. Changing `PROXY_HTTP`, password, status, or egress IP updates the existing proxy instead of creating another record. To reconcile duplicate rows created by an older version:
 
 ```bash
@@ -144,20 +166,20 @@ Add `PROXY_EGRESS_IP` to CSV/TXT imports when multiple proxy endpoints share the
 
 Queue environment settings:
 
-| Variable                 | Default  | Purpose                                                 |
-| ------------------------ | -------- | ------------------------------------------------------- |
-| `QUEUE_BACKEND`          | `sqlite` | `sqlite` for local use or `redis` for BullMQ            |
-| `WORKER_CONCURRENCY`     | `3`      | Account lanes; each lane runs one account process       |
-| `QUEUE_PROXY_CONCURRENCY` | `1` | Concurrent accounts allowed per proxy/egress route |
-| `PROXY_LEASE_TTL_MS`     | `120000` | Lease lifetime, renewed every third of the TTL          |
-| `QUEUE_POLL_INTERVAL_MS` | `1000`   | Local worker polling interval                           |
-| `JOB_MAX_ATTEMPTS`       | `3`      | Maximum attempts for a failed account job               |
-| `JOB_RETRY_DELAY_MS`     | `30000`  | Initial exponential retry delay                         |
-| `JOB_IDLE_TIMEOUT_MS`    | `300000` | Stop/retry a child after this long without output       |
-| `QUEUE_DRY_RUN`          | `false`  | Test queue and locks without launching the browser tool |
-| `QUEUE_EXIT_WHEN_IDLE`   | `false`  | Exit a local worker after all active jobs finish        |
-| `QUEUE_LOG_MODE`         | `compact` | Console detail: `compact`, `verbose`, or `silent`      |
-| `QUEUE_SKIP_SUCCEEDED_TODAY` | `true` | Skip accounts with a validated success today       |
+| Variable                     | Default   | Purpose                                                 |
+| ---------------------------- | --------- | ------------------------------------------------------- |
+| `QUEUE_BACKEND`              | `sqlite`  | `sqlite` for local use or `redis` for BullMQ            |
+| `WORKER_CONCURRENCY`         | `3`       | Account lanes; each lane runs one account process       |
+| `QUEUE_PROXY_CONCURRENCY`    | `1`       | Concurrent accounts allowed per proxy/egress route      |
+| `PROXY_LEASE_TTL_MS`         | `120000`  | Lease lifetime, renewed every third of the TTL          |
+| `QUEUE_POLL_INTERVAL_MS`     | `1000`    | Local worker polling interval                           |
+| `JOB_MAX_ATTEMPTS`           | `3`       | Maximum attempts for a failed account job               |
+| `JOB_RETRY_DELAY_MS`         | `30000`   | Initial exponential retry delay                         |
+| `JOB_IDLE_TIMEOUT_MS`        | `300000`  | Stop/retry a child after this long without output       |
+| `QUEUE_DRY_RUN`              | `false`   | Test queue and locks without launching the browser tool |
+| `QUEUE_EXIT_WHEN_IDLE`       | `false`   | Exit a local worker after all active jobs finish        |
+| `QUEUE_LOG_MODE`             | `compact` | Console detail: `compact`, `verbose`, or `silent`       |
+| `QUEUE_SKIP_SUCCEEDED_TODAY` | `true`    | Skip accounts with a validated success today            |
 
 The queue starts one-account child processes, so its proxy leases remain the source of concurrency control regardless of the bot's `clusters` setting. SQLite mode supports multiple processes on one machine. Do not put `accounts.db` on a network share. Before distributing workers across multiple machines, move job/catalog state to PostgreSQL or another central database service.
 
@@ -213,7 +235,7 @@ npm run build
 npm run start
 ```
 
-`npm run start` keeps the original account workflow and schedules it in proxy-safe lanes. Set `clusters` to `0` (the default) to create one worker for every distinct proxy route automatically. Accounts on the same proxy always stay in one worker and run sequentially; different proxies run in parallel. Set `clusters` to a positive number to cap the worker count. Every enabled account must have a valid proxy: loading, importing, and browser launch all fail closed instead of falling back to direct traffic. Mobile and desktop fingerprints are persisted by default so saved sessions keep a stable browser identity.
+`npm run start` keeps the original account workflow and schedules it in proxy-safe lanes. Set `clusters` to `0` (the default) to create one worker for every distinct proxy route automatically. Accounts on the same proxy always stay in one worker and run sequentially; different proxies run in parallel. Set `clusters` to a positive number to cap the worker count. Accounts use a valid proxy by default and fail closed if it is missing; only accounts explicitly imported with `--no-proxy` may use direct traffic. Mobile and desktop fingerprints are persisted by default so saved sessions keep a stable browser identity.
 
 ## Docker
 
@@ -307,7 +329,7 @@ Edit `config.json` to customize behavior, or set `CONFIG_*` environment variable
 | --------------------------- | ------- | ------------ | ------------------------------------------------------------------ | ------------------------------------- |
 | `sessionPath`               | string  | `"sessions"` | Directory to store browser sessions                                |                                       |
 | `headless`                  | boolean | `false`      | Run browser invisibly                                              | Always `true` in Docker               |
-| `clusters`                  | number  | `0`          | Max proxy-safe workers; `0` selects one worker per proxy route      | `CONFIG_CLUSTERS`                     |
+| `clusters`                  | number  | `0`          | Max proxy-safe workers; `0` selects one worker per proxy route     | `CONFIG_CLUSTERS`                     |
 | `errorDiagnostics`          | boolean | `false`      | Save error and unknown-login page diagnostics under `diagnostics/` | `CONFIG_ERROR_DIAGNOSTICS`            |
 | `ensureStreakProtection`    | boolean | `true`       | Ensure streak protection is enabled                                | `CONFIG_ENSURE_STREAK_PROTECTION`     |
 | `autoClaimPunchcardRewards` | boolean | `false`      | Auto-claim completed punchcard rewards                             | `CONFIG_AUTO_CLAIM_PUNCHCARD_REWARDS` |
@@ -433,12 +455,12 @@ Opt-in features that may change. Disabled by default.
 
 ### Proxy
 
-An account with a non-empty `PROXY_URL` is proxy-locked. Its browser traffic and all account-scoped HTTP requests, including query sources and user-agent metadata lookups, use that proxy. The runner never falls back to the machine's direct connection. `PROXY_HTTP` is retained for import compatibility, but it cannot disable this enforcement when `PROXY_URL` is present.
+An account with a non-empty `PROXY_URL` is proxy-locked. Its browser traffic and all account-scoped HTTP requests, including query sources and user-agent metadata lookups, use that proxy. The runner never silently falls back to the machine's direct connection. Direct traffic is used only when the account was explicitly imported with `--no-proxy`. `PROXY_HTTP` is retained for import compatibility, but it cannot disable enforcement when `PROXY_URL` is present.
 
 Before an account starts, the runner performs a bounded HTTP health check through the configured proxy. A failed proxy opens a 60-second circuit for that endpoint so other accounts assigned to the same dead proxy fail immediately instead of repeating long timeouts. Run `npm run proxies:check` to validate every configured proxy before a batch.
 
-| Setting             | Type    | Default | Description                 | Docker environment variable |
-| ------------------- | ------- | ------- | --------------------------- | --------------------------- |
+| Setting             | Type    | Default | Description                                                                 | Docker environment variable |
+| ------------------- | ------- | ------- | --------------------------------------------------------------------------- | --------------------------- |
 | `proxy.queryEngine` | boolean | `true`  | Legacy compatibility setting; account proxy-locking always takes precedence | `CONFIG_PROXY_QUERY_ENGINE` |
 
 ### Webhooks

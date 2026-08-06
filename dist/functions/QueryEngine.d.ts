@@ -10,6 +10,13 @@ interface QueryManagerOptions {
 export declare class QueryCore {
     private bot;
     constructor(bot: MicrosoftRewardsBot);
+    /**
+     * Routes query-engine HTTP calls per config.proxy.queryEngine:
+     * - true (default): through the account proxy, so trend/suggestion traffic
+     *   shares the account's exit IP (coherent network fingerprint).
+     * - false: through the direct host transport, saving proxy bandwidth.
+     */
+    private queryRequest;
     queryManager(options?: QueryManagerOptions): Promise<string[]>;
     private buildRelatedClusters;
     private normalizeAndDedupe;

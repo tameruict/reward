@@ -51,8 +51,12 @@ export async function sendTelegram(config: WebhookTelegramConfig, content: strin
             await httpRequest(request)
         } catch (err) {
             const status = (err as { response?: { status?: number } })?.response?.status
-
-            if (status === 429 || status === 401 || status === 403) return
+            if (status === 429) return
+            // 401/403 usually mean a revoked bot token or wrong chat_id — the exact
+            // failure that otherwise silently disables all Telegram alerts.
+            console.warn(
+                `[Webhook:Telegram] delivery failed${status ? ` (HTTP ${status})` : ''}: ${err instanceof Error ? err.message : String(err)}`
+            )
         }
     })
 }

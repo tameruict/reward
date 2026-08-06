@@ -81,7 +81,12 @@ function normalizeBundle(input) {
     if (!Array.isArray(bundle.accounts) || !bundle.accounts.length)
         fail('Import file must contain a non-empty accounts array.')
     if (bundle.proxies != null && !Array.isArray(bundle.proxies)) fail('proxies must be an array.')
-    return { proxies: bundle.proxies ?? [], accounts: bundle.accounts }
+    return {
+        proxies: bundle.proxies ?? [],
+        accounts: bundle.accounts,
+        autoAssignStoredProxies: Boolean(bundle.autoAssignStoredProxies),
+        allowDirectAccounts: Boolean(bundle.allowDirectAccounts)
+    }
 }
 
 function tableExists(db, name) {
@@ -172,11 +177,12 @@ export function cleanupProxyRecords(projectRoot) {
     }
 }
 
-export function importAccountBundle(projectRoot, input) {
+export function importAccountBundle(projectRoot, input, options = {}) {
     const normalizedBundle = normalizeBundle(input)
     const dbPath = resolveAccountsDbPath(projectRoot)
     ensureAccountsDatabase(dbPath)
     const db = new DatabaseSync(dbPath)
+    const restoreDeleted = Boolean(options.restoreDeleted)
 
     const deletedEmails = new Set(
         db
@@ -186,10 +192,15 @@ export function importAccountBundle(projectRoot, input) {
     )
     const skippedDeletedEmails = normalizedBundle.accounts
         .map(account => text(account?.email).toLowerCase())
-        .filter(email => deletedEmails.has(email))
+        .filter(email => !restoreDeleted && deletedEmails.has(email))
+    const restoredDeletedEmails = normalizedBundle.accounts
+        .map(account => text(account?.email).toLowerCase())
+        .filter(email => restoreDeleted && deletedEmails.has(email))
     const bundle = {
         ...normalizedBundle,
-        accounts: normalizedBundle.accounts.filter(account => !deletedEmails.has(text(account?.email).toLowerCase()))
+        accounts: normalizedBundle.accounts.filter(
+            account => restoreDeleted || !deletedEmails.has(text(account?.email).toLowerCase())
+        )
     }
 
     const proxiesByLabel = new Map()
@@ -205,7 +216,7 @@ export function importAccountBundle(projectRoot, input) {
     }
 
     for (const rawAccount of bundle.accounts) {
-        if (rawAccount?.proxy && !rawAccount.proxyLabel && !rawAccount.proxy_label) {
+        if (rawAccount?.useProxy !== false && rawAccount?.proxy && !rawAccount.proxyLabel && !rawAccount.proxy_label) {
             const inline = normalizeProxy(rawAccount.proxy, `proxy-${proxiesByLabel.size + 1}`)
             const key = inline.label.toLowerCase()
             const existing = proxiesByLabel.get(key)
@@ -272,13 +283,52 @@ export function importAccountBundle(projectRoot, input) {
             )
         }
 
+        if (restoreDeleted && restoredDeletedEmails.length) {
+            const restoreDeletedAccount = db.prepare('DELETE FROM deleted_accounts WHERE LOWER(email) = LOWER(?)')
+            for (const email of new Set(restoredDeletedEmails)) restoreDeletedAccount.run(email)
+        }
+
+        const autoProxyCandidates = bundle.autoAssignStoredProxies
+            ? db
+                  .prepare(
+                      `
+                      SELECT p.id, p.label, COUNT(a.id) AS account_count
+                      FROM proxies p
+                      LEFT JOIN accounts a ON a.proxy_id = p.id
+                      WHERE p.status = 'active'
+                      GROUP BY p.id, p.label
+                      ORDER BY account_count, LOWER(p.label)
+                  `
+                  )
+                  .all()
+                  .map(proxy => ({ ...proxy, account_count: Number(proxy.account_count) }))
+            : []
+
+        const nextAutoProxy = () => {
+            if (!autoProxyCandidates.length) {
+                fail(
+                    'Pipe-delimited EMAIL|PASSWORD rows require at least one active proxy already stored in the database.'
+                )
+            }
+            autoProxyCandidates.sort(
+                (a, b) =>
+                    a.account_count - b.account_count ||
+                    String(a.label).localeCompare(String(b.label), undefined, { sensitivity: 'base' })
+            )
+            const selected = autoProxyCandidates[0]
+            selected.account_count += 1
+            return selected.id
+        }
+
         let nextSlot = Number(db.prepare('SELECT COALESCE(MAX(slot), 0) AS value FROM accounts').get().value)
-        const findAccount = db.prepare('SELECT id, password, slot FROM accounts WHERE LOWER(email) = LOWER(?)')
+        const findAccount = db.prepare(
+            'SELECT id, password, slot, proxy_id, use_proxy FROM accounts WHERE LOWER(email) = LOWER(?)'
+        )
         const upsertAccount = db.prepare(`
             INSERT INTO accounts (
                 id, email, password, totp_secret, recovery_email, geo_locale, lang_code,
-                proxy_id, status, slot, save_fingerprint_mobile, save_fingerprint_desktop, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                proxy_id, use_proxy, status, slot, save_fingerprint_mobile, save_fingerprint_desktop, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(email) DO UPDATE SET
                 password = excluded.password,
                 totp_secret = excluded.totp_secret,
@@ -286,6 +336,7 @@ export function importAccountBundle(projectRoot, input) {
                 geo_locale = excluded.geo_locale,
                 lang_code = excluded.lang_code,
                 proxy_id = excluded.proxy_id,
+                use_proxy = excluded.use_proxy,
                 status = excluded.status,
                 slot = excluded.slot,
                 save_fingerprint_mobile = excluded.save_fingerprint_mobile,
@@ -307,13 +358,22 @@ export function importAccountBundle(projectRoot, input) {
             const status = text(raw.status, 'ready').toLowerCase()
             if (!ACCOUNT_STATUSES.has(status)) fail(`Account ${email} has invalid status: ${status}.`)
 
+            const useProxy = raw.useProxy !== false
+            if (!useProxy && !bundle.allowDirectAccounts) {
+                fail(`Account ${email} requests direct mode, but direct account traffic was not explicitly enabled.`)
+            }
+
             const proxyLabel = text(raw.proxyLabel ?? raw.proxy_label)
             let proxyId = null
-            if (proxyLabel) {
+            if (!useProxy) {
+                proxyId = null
+            } else if (proxyLabel) {
                 const proxy = proxiesByLabel.get(proxyLabel.toLowerCase())
                 const stored = proxy ? { id: proxy.id } : findProxyByLabel.get(proxyLabel)
                 if (!stored) fail(`Account ${email} references unknown proxyLabel: ${proxyLabel}.`)
                 proxyId = stored.id
+            } else if (bundle.autoAssignStoredProxies) {
+                proxyId = existing?.proxy_id || nextAutoProxy()
             } else {
                 fail(`Account ${email} requires a proxy; direct account traffic is disabled.`)
             }
@@ -335,6 +395,7 @@ export function importAccountBundle(projectRoot, input) {
                 text(raw.geoLocale ?? raw.geo_locale, 'auto'),
                 text(raw.langCode ?? raw.lang_code, 'en'),
                 proxyId,
+                useProxy ? 1 : 0,
                 status,
                 slot,
                 boolInt(saveFingerprint.mobile ?? raw.save_fingerprint_mobile ?? true),
@@ -353,6 +414,8 @@ export function importAccountBundle(projectRoot, input) {
             total: bundle.accounts.length,
             skippedDeleted: skippedDeletedEmails.length,
             skippedDeletedEmails,
+            restoredDeleted: new Set(restoredDeletedEmails).size,
+            restoredDeletedEmails: [...new Set(restoredDeletedEmails)],
             reconciliation
         }
     } catch (error) {
@@ -373,7 +436,8 @@ export function listAccountRows(projectRoot) {
         return db
             .prepare(
                 `
-            SELECT a.slot, a.email, a.status, COALESCE(p.label, '') AS proxy,
+            SELECT a.slot, a.email, a.status,
+                   CASE WHEN a.use_proxy = 0 THEN 'DIRECT' ELSE COALESCE(p.label, '') END AS proxy,
                    COALESCE(p.account_capacity, 0) AS capacity
             FROM accounts a
             LEFT JOIN proxies p ON p.id = a.proxy_id
@@ -396,7 +460,20 @@ export function getAccountStoreStats(projectRoot) {
             accounts: Number(db.prepare('SELECT COUNT(*) AS value FROM accounts').get().value),
             permanentlyDeleted: Number(db.prepare('SELECT COUNT(*) AS value FROM deleted_accounts').get().value),
             readyAccounts: Number(
-                db.prepare("SELECT COUNT(*) AS value FROM accounts WHERE status IN ('ready', 'active')").get().value
+                db
+                    .prepare(
+                        `
+                        SELECT COUNT(*) AS value
+                        FROM accounts a
+                        LEFT JOIN proxies p ON p.id = a.proxy_id
+                        WHERE a.status IN ('ready', 'active')
+                          AND (
+                              (a.use_proxy = 0 AND a.proxy_id IS NULL)
+                              OR (a.use_proxy = 1 AND a.proxy_id IS NOT NULL AND p.status = 'active')
+                          )
+                    `
+                    )
+                    .get().value
             ),
             proxies: Number(
                 db

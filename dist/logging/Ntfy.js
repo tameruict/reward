@@ -50,6 +50,7 @@ async function sendNtfy(config, content, level) {
             const status = err?.response?.status;
             if (status === 429)
                 return;
+            console.warn(`[Webhook:Ntfy] delivery failed${status ? ` (HTTP ${status})` : ''}: ${err instanceof Error ? err.message : String(err)}`);
         }
     });
 }

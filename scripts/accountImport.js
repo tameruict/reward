@@ -47,7 +47,7 @@ function autoProxyLabel(record) {
     })
 }
 
-function recordsToBundle(rawRecords) {
+function recordsToBundle(rawRecords, options = {}) {
     if (!rawRecords.length) throw new Error('Import file does not contain any account rows.')
 
     const proxies = new Map()
@@ -105,7 +105,13 @@ function recordsToBundle(rawRecords) {
         }
     })
 
-    return { proxies: [...proxies.values()].map(entry => entry.proxy), accounts }
+    return {
+        proxies: [...proxies.values()].map(entry => entry.proxy),
+        accounts,
+        autoAssignStoredProxies:
+            Boolean(options.autoAssignStoredProxies) && accounts.some(account => !account.proxyLabel),
+        sourceFormat: options.sourceFormat
+    }
 }
 
 function parseCsvFile(content) {
@@ -153,13 +159,92 @@ function parseTextBlocks(content) {
     return recordsToBundle(records)
 }
 
+function parsePipeProxy(value, lineNumber) {
+    const raw = String(value ?? '').trim()
+    if (!raw) return {}
+
+    const compactParts = raw.split(':')
+    if (compactParts.length === 4 && /^\d+$/.test(compactParts[1]) && !raw.includes('://') && !raw.includes('@')) {
+        const [host, port, username, password] = compactParts
+        return {
+            proxy_url: host,
+            proxy_port: port,
+            proxy_username: username,
+            proxy_password: password
+        }
+    }
+
+    const parsed = parseProxyParts({ url: raw })
+    if (!parsed.host || !parsed.port) {
+        throw new Error(
+            `Invalid pipe-delimited proxy on line ${lineNumber}: expected host:port, a proxy URL, or host:port:user:password.`
+        )
+    }
+
+    return {
+        proxy_url: raw,
+        proxy_port: parsed.port,
+        proxy_username: parsed.username,
+        proxy_password: parsed.password
+    }
+}
+
+function parsePipeRows(content) {
+    const records = []
+
+    for (const [lineIndex, rawLine] of content.split(/\r?\n/).entries()) {
+        const line = rawLine.trim()
+        if (!line || line.startsWith('#')) continue
+
+        const parts = line.split('|').map(value => value.trim())
+        if (parts.length < 2 || parts.length > 5) {
+            throw new Error(
+                `Invalid pipe-delimited line ${lineIndex + 1}: expected EMAIL|PASSWORD with optional proxy, username, and password columns.`
+            )
+        }
+
+        const [email, password, proxyValue = '', proxyUsername = '', proxyPassword = ''] = parts
+        if (!email) throw new Error(`Import row ${lineIndex + 1} is missing email.`)
+        if (!password) throw new Error(`Import row ${lineIndex + 1} is missing password.`)
+
+        const proxy = parsePipeProxy(proxyValue, lineIndex + 1)
+        if (proxyValue && (proxyUsername || proxyPassword)) {
+            proxy.proxy_username = proxyUsername
+            proxy.proxy_password = proxyPassword
+        }
+
+        records.push({
+            email,
+            password,
+            ...proxy
+        })
+    }
+
+    return recordsToBundle(records, {
+        autoAssignStoredProxies: true,
+        sourceFormat: 'pipe'
+    })
+}
+
+function parseTextFile(content) {
+    const dataLines = content
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'))
+
+    if (dataLines.length && dataLines.every(line => line.includes('|'))) {
+        return parsePipeRows(content)
+    }
+    return parseTextBlocks(content)
+}
+
 export function loadAccountImportFile(inputPath) {
     const absolutePath = path.resolve(process.cwd(), inputPath)
     const content = fs.readFileSync(absolutePath, 'utf8')
     const extension = path.extname(absolutePath).toLowerCase()
 
     if (extension === '.csv') return parseCsvFile(content)
-    if (extension === '.txt') return parseTextBlocks(content)
+    if (extension === '.txt') return parseTextFile(content)
     if (extension === '.json') return JSON.parse(content)
     throw new Error('Unsupported import file. Use .csv, .txt, or .json.')
 }

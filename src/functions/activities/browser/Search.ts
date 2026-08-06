@@ -22,6 +22,39 @@ const POINTS_STAGNANT_LIMIT = 10
 const SEARCH_BOX_SELECTORS = ['#sb_form_q', 'textarea[name="q"]', 'input[name="q"]'] as const
 const RESULT_LINK_SELECTORS = ['#b_results .b_algo h2 a', '#b_results .b_algo a[href]', 'main .b_algo h2 a'] as const
 
+// How often a human actually scrolls / opens a result. Searching alone earns the
+// points, so clicking every single result is a deterministic bot tell.
+const SCROLL_PROBABILITY = 0.8
+const CLICK_PROBABILITY = 0.35
+const MAX_CLICK_RANK = 5
+
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&apos;': "'",
+    '&nbsp;': ' '
+}
+
+/**
+ * RSS/Reddit/HackerNews titles arrive HTML-encoded; typing "&amp;"/"&#39;"
+ * literally into Bing is unnatural. Decode the handful of common entities
+ * without pulling in a dependency.
+ */
+function decodeHtmlEntities(text: string): string {
+    return text
+        .replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, m => NAMED_HTML_ENTITIES[m] ?? m)
+        .replace(/&#(\d+);/g, (whole, code: string) => {
+            const n = Number(code)
+            return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : whole
+        })
+        .replace(/&#x([0-9a-fA-F]+);/g, (whole, code: string) => {
+            const n = parseInt(code, 16)
+            return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : whole
+        })
+}
+
 interface SessionStats {
     totalGained: number
     performed: number
@@ -180,7 +213,7 @@ export class Search extends Workers {
             geoLocale: (this.bot.userData.geoLocale ?? 'US').toUpperCase(),
             sourceOrder: this.bot.config.searchSettings.queryEngines
         })
-        return [...new Set(pool.map(q => q.trim()).filter(Boolean))]
+        return [...new Set(pool.map(q => decodeHtmlEntities(q).trim()).filter(Boolean))]
     }
 
     private async bingSearch(page: Page, query: string, isMobile: boolean): Promise<void> {
@@ -208,12 +241,14 @@ export class Search extends Workers {
                 await page.waitForLoadState('domcontentloaded', { timeout: BING_DOM_READY_TIMEOUT }).catch(() => {})
                 await this.bot.utils.wait(1500)
 
-                if (this.bot.config.searchSettings.scrollRandomResults) {
-                    await this.bot.utils.wait(2000)
+                // Scroll on most searches, but only open a result on a minority —
+                // and with a varied dwell — so the behaviour isn't deterministic.
+                if (this.bot.config.searchSettings.scrollRandomResults && Math.random() < SCROLL_PROBABILITY) {
+                    await this.bot.utils.wait(this.bot.utils.randomDelay(1200, 2600))
                     await this.randomScroll(page, isMobile)
                 }
-                if (this.bot.config.searchSettings.clickRandomResults) {
-                    await this.bot.utils.wait(2000)
+                if (this.bot.config.searchSettings.clickRandomResults && Math.random() < CLICK_PROBABILITY) {
+                    await this.bot.utils.wait(this.bot.utils.randomDelay(1200, 2600))
                     await this.clickRandomLink(page, isMobile)
                 }
 
@@ -299,10 +334,22 @@ export class Search extends Workers {
 
     private async randomScroll(page: Page, isMobile: boolean) {
         try {
-            const viewportHeight = await page.evaluate(() => window.innerHeight)
-            const totalHeight = await page.evaluate(() => document.body.scrollHeight)
-            const scrollPos = Math.floor(Math.random() * Math.max(1, totalHeight - viewportHeight))
-            await page.evaluate(pos => window.scrollTo({ left: 0, top: pos, behavior: 'auto' }), scrollPos)
+            // Several small wheel bursts with read pauses, instead of one instant
+            // jump to a random offset, so the scroll timeline looks human.
+            const steps = 2 + Math.floor(Math.random() * 4) // 2-5 bursts
+            for (let i = 0; i < steps; i++) {
+                const delta = 200 + Math.floor(Math.random() * 500)
+                await page.mouse.wheel(0, delta).catch(async () => {
+                    await page.evaluate(d => window.scrollBy({ left: 0, top: d, behavior: 'auto' }), delta).catch(() => {})
+                })
+                await this.bot.utils.wait(this.bot.utils.randomDelay(400, 1200))
+            }
+            // Occasionally scroll back up a little, like re-reading a result.
+            if (Math.random() < 0.3) {
+                const back = -(150 + Math.floor(Math.random() * 300))
+                await page.mouse.wheel(0, back).catch(() => {})
+                await this.bot.utils.wait(this.bot.utils.randomDelay(300, 800))
+            }
         } catch (error) {
             this.bot.logger.error(
                 isMobile,
@@ -324,8 +371,9 @@ export class Search extends Workers {
                 return
             }
 
+            const clickSelector = await this.pickWeightedResult(page, resultSelector)
             const searchPageUrl = page.url()
-            const clicked = await this.bot.browser.utils.ghostClick(page, resultSelector)
+            const clicked = await this.bot.browser.utils.ghostClick(page, clickSelector)
             if (!clicked) return
 
             await this.bot.utils.wait(this.bot.config.searchSettings.searchResultVisitTime)
@@ -361,6 +409,32 @@ export class Search extends Workers {
         }
 
         return null
+    }
+
+    /**
+     * Picks which organic result to open, biased strongly toward the top ranks
+     * (humans rarely click far down), instead of always clicking the first one.
+     * Falls back to the base selector when a specific rank isn't resolvable.
+     */
+    private async pickWeightedResult(page: Page, baseSelector: string): Promise<string> {
+        const count = await page
+            .locator(baseSelector)
+            .count()
+            .catch(() => 0)
+        if (count <= 1) return baseSelector
+
+        const maxRank = Math.min(count, MAX_CLICK_RANK)
+        // Squaring a uniform random biases the pick toward rank 1-2.
+        const rank = 1 + Math.floor(Math.random() ** 2 * maxRank)
+        if (rank <= 1) return baseSelector
+
+        const nthSelector = `:nth-match(${baseSelector}, ${rank})`
+        const visible = await page
+            .locator(nthSelector)
+            .first()
+            .isVisible({ timeout: 500 })
+            .catch(() => false)
+        return visible ? nthSelector : baseSelector
     }
 
     private async navigateToBing(page: Page, url: string, isMobile: boolean): Promise<void> {

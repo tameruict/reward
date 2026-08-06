@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto'
 
 import { URLs } from '../constants/urls'
-import { BING_APP_USER_AGENT } from '../constants/userAgents'
+import { buildAppHeaders } from './DeviceIdentity'
 import type { BrowserContext, Cookie, Page } from 'patchright'
 import { ProxyUnavailableError, type HttpRequestConfig } from '../util/Http'
 
@@ -175,12 +175,15 @@ export default class BrowserFunc {
     async getAppDashboardData(): Promise<AppDashboardData> {
         try {
             const request: HttpRequestConfig = {
-                url: URLs.platform.me('SAIOS'),
+                url: URLs.platform.me(this.bot.mobileDevice.channel),
                 method: 'GET',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'User-Agent': BING_APP_USER_AGENT
-                }
+                headers: buildAppHeaders({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent
+                })
             }
 
             const response = await this.bot.http.request(request)
@@ -273,14 +276,15 @@ export default class BrowserFunc {
             const eligibleOffers = ['ENUS_readarticle3_30points', 'Gamification_Sapphire_DailyCheckIn']
 
             const request: HttpRequestConfig = {
-                url: URLs.platform.me('SAAndroid'),
+                url: URLs.platform.me(this.bot.mobileDevice.channel),
                 method: 'GET',
-                headers: {
-                    Authorization: `Bearer ${this.bot.accessToken}`,
-                    'X-Rewards-Country': this.bot.userData.geoLocale,
-                    'X-Rewards-Language': 'en',
-                    'X-Rewards-ismobile': 'true'
-                }
+                headers: buildAppHeaders({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent
+                })
             }
 
             const response = await this.bot.http.request<AppUserData>(request)

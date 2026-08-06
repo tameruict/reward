@@ -13,6 +13,12 @@ export declare class Search extends Workers {
     private randomScroll;
     private clickRandomLink;
     private visibleResultLink;
+    /**
+     * Picks which organic result to open, biased strongly toward the top ranks
+     * (humans rarely click far down), instead of always clicking the first one.
+     * Falls back to the base selector when a specific rank isn't resolvable.
+     */
+    private pickWeightedResult;
     private navigateToBing;
 }
 //# sourceMappingURL=Search.d.ts.map

@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.QueryCore = void 0;
+const Http_1 = require("../util/Http");
 const fs = __importStar(require("fs"));
 const path_1 = __importDefault(require("path"));
 const fast_xml_parser_1 = require("fast-xml-parser");
@@ -67,6 +68,17 @@ class QueryCore {
     bot;
     constructor(bot) {
         this.bot = bot;
+    }
+    /**
+     * Routes query-engine HTTP calls per config.proxy.queryEngine:
+     * - true (default): through the account proxy, so trend/suggestion traffic
+     *   shares the account's exit IP (coherent network fingerprint).
+     * - false: through the direct host transport, saving proxy bandwidth.
+     */
+    queryRequest(config) {
+        return this.bot.config.proxy?.queryEngine === false
+            ? (0, Http_1.httpRequest)(config)
+            : this.bot.http.request(config);
     }
     async queryManager(options = {}) {
         const { shuffle = false, sourceOrder = ['google', 'wikipedia', 'wikirandom', 'hackernews', 'reddit', 'local'], related = true, langCode = 'en', geoLocale = 'US' } = options;
@@ -157,7 +169,7 @@ class QueryCore {
                 },
                 data: `f.req=[[[${GOOGLE_TRENDS_RPC_ID},"[null, null, \\"${geoLocale.toUpperCase()}\\", 0, null, 48]"]]]`
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const trendsData = this.extractJsonFromResponse(response.data);
             if (!trendsData) {
                 this.bot.logger.debug(this.bot.isMobile, 'SEARCH-GOOGLE-TRENDS', 'No trends data parsed from response');
@@ -196,7 +208,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             return response.data.suggestionGroups?.[0]?.searchSuggestions?.map((x) => x.query) ?? [];
         }
         catch (error) {
@@ -211,7 +223,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const related = response.data?.[1];
             return Array.isArray(related) ? related : [];
         }
@@ -231,7 +243,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const articles = response.data.items?.[0]?.articles ?? [];
             return articles.slice(0, 50).map(a => a.article.replace(/_/g, ' '));
         }
@@ -248,7 +260,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const posts = response.data.data?.children ?? [];
             return posts.filter(p => !p.data.over_18).map(p => p.data.title);
         }
@@ -264,7 +276,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const hits = response.data?.hits ?? [];
             return hits.map(h => (h.title ?? '').replace(/^(?:Show|Ask)\s+HN:\s*/i, '').trim()).filter(Boolean);
         }
@@ -281,7 +293,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const pages = response.data?.query?.random ?? [];
             return pages.map(p => p.title.trim()).filter(Boolean);
         }
@@ -333,7 +345,7 @@ class QueryCore {
                 method: 'GET',
                 headers: { ...(this.bot.fingerprint?.headers ?? {}) }
             };
-            const response = await this.bot.http.request(request);
+            const response = await this.queryRequest(request);
             const xml = typeof response.data === 'string' ? response.data : String(response.data ?? '');
             return this.parseRssTitles(xml);
         }

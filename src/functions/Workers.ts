@@ -73,7 +73,16 @@ export class Workers {
         this.bot.logger.info(this.bot.isMobile, 'MORE-PROMOTIONS', 'All "More Promotion" items have been completed')
     }
 
-    public async doAppPromotions(data: AppDashboardData) {
+    public async doAppPromotions(data: AppDashboardData | null) {
+        if (!data?.response?.promotions?.length) {
+            this.bot.logger.info(
+                this.bot.isMobile,
+                'APP-PROMOTIONS',
+                'App dashboard data unavailable or empty; skipping app promotions'
+            )
+            return
+        }
+
         const appRewards = data.response.promotions.filter(x => {
             if (x.attributes['complete']?.toLowerCase() !== 'false') return false
             if (!x.attributes['offerid']) return false
@@ -92,12 +101,29 @@ export class Workers {
             return
         }
 
+        let failures = 0
         for (const reward of appRewards) {
-            await this.bot.activities.doAppReward(reward)
+            // Isolate each promotion: one failing offer must not abort the rest.
+            try {
+                await this.bot.activities.doAppReward(reward)
+            } catch (error) {
+                failures++
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'APP-PROMOTIONS',
+                    `Skipped one promotion (${reward.attributes['offerid'] ?? 'unknown'}): ${error instanceof Error ? error.message : String(error)}`
+                )
+            }
             await this.bot.utils.wait(this.bot.utils.randomDelay(5000, 15000))
         }
 
-        this.bot.logger.info(this.bot.isMobile, 'APP-PROMOTIONS', 'All "App Promotions" items have been completed')
+        this.bot.logger.info(
+            this.bot.isMobile,
+            'APP-PROMOTIONS',
+            failures
+                ? `App Promotions finished with ${failures}/${appRewards.length} skipped`
+                : 'All "App Promotions" items have been completed'
+        )
     }
 
     public async doPunchCards(data: DashboardData, page: Page) {
