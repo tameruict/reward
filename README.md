@@ -292,6 +292,9 @@ Common uses include:
   Server-Sent Events (SSE);
 - reading the active configuration and schedule, with config and schedule
   changes available only when their explicit `API_ALLOW_*` options are enabled.
+- managing accounts and proxies remotely with `GET /proxies`,
+  `POST /accounts/import`, `PATCH /accounts/:email/proxy`,
+  `PATCH /accounts/:email/status`, and `DELETE /accounts/:email`;
 
 For example, start only `ACCOUNT_2` with cURL:
 

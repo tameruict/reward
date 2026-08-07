@@ -12,6 +12,8 @@ The API can:
 - stream structured logs over Server-Sent Events (SSE);
 - return recent errors, in-memory run history, configured account summaries,
   and diagnostic captures;
+- import accounts and proxies remotely, list proxy usage, assign or replace an
+  account's proxy, enable/disable accounts, and delete accounts;
 - list stored session metadata and delete the mobile/desktop sessions belonging
   to one account;
 - read `config.json` and, when explicitly enabled, validate and update it;
@@ -119,6 +121,111 @@ account-scoped session deletion are unavailable.
 
 The exact package name and version are read from the repository's
 `package.json`.
+
+## Remote account and proxy management
+
+Account and proxy mutations require `API_TOKEN` and are intentionally rejected
+while a bot run is starting, running, or stopping. This prevents a running
+child process from seeing a half-updated account/proxy assignment. Credentials
+are encrypted by the existing account store and are never returned by these
+endpoints.
+
+List all accounts, including disabled accounts, and their safe proxy metadata:
+
+```bash
+curl --request GET \
+  --url http://127.0.0.1:3010/accounts \
+  --header 'Authorization: Bearer YOUR_API_TOKEN'
+```
+
+List stored proxies and current account usage:
+
+```bash
+curl --request GET \
+  --url http://127.0.0.1:3010/proxies \
+  --header 'Authorization: Bearer YOUR_API_TOKEN'
+```
+
+Import or update accounts and proxies with JSON. Existing account passwords may
+be omitted when updating an account; the encrypted value already in the
+database is retained. A proxy is referenced by its label:
+
+```json
+{
+    "proxies": [
+        {
+            "label": "proxy-vn-01",
+            "url": "proxy.example.com",
+            "port": 8000,
+            "username": "proxy-user",
+            "password": "proxy-password",
+            "egressIp": "203.0.113.10",
+            "accountCapacity": 1
+        }
+    ],
+    "accounts": [
+        {
+            "email": "user@example.com",
+            "password": "account-password",
+            "totpSecret": "OPTIONAL_TOTP_SECRET",
+            "proxyLabel": "proxy-vn-01",
+            "status": "ready"
+        }
+    ]
+}
+```
+
+Send that object to `POST /accounts/import`. The endpoint accepts up to 5 MB of
+JSON and returns only safe account/proxy metadata.
+
+Assign an existing proxy to an account without resending its password:
+
+```bash
+curl --request PATCH \
+  --url 'http://127.0.0.1:3010/accounts/user%40example.com/proxy' \
+  --header 'Authorization: Bearer YOUR_API_TOKEN' \
+  --header 'Content-Type: application/json' \
+  --data '{"proxyLabel":"proxy-vn-01"}'
+```
+
+Replace the proxy and store a new proxy record in one request:
+
+```json
+{
+    "proxy": {
+        "label": "proxy-vn-02",
+        "url": "new-proxy.example.com",
+        "port": 8000,
+        "username": "proxy-user",
+        "password": "new-proxy-password"
+    }
+}
+```
+
+Send that object to `PATCH /accounts/user%40example.com/proxy`. To explicitly
+detach the proxy and use direct traffic, send `{"useProxy":false}`. This is
+kept as a separate explicit operation because direct traffic is normally
+disabled by the importer.
+
+Account lifecycle operations are also available:
+
+```bash
+# Disable or re-enable an account
+curl --request PATCH \
+  --url 'http://127.0.0.1:3010/accounts/user%40example.com/status' \
+  --header 'Authorization: Bearer YOUR_API_TOKEN' \
+  --header 'Content-Type: application/json' \
+  --data '{"status":"disabled"}'
+
+# Permanently delete an account and record a deletion marker
+curl --request DELETE \
+  --url 'http://127.0.0.1:3010/accounts/user%40example.com' \
+  --header 'Authorization: Bearer YOUR_API_TOKEN'
+```
+
+Keep the API behind HTTPS/VPN, set a long random `API_TOKEN`, and do not put
+account or proxy passwords in browser logs, query strings, screenshots, or
+client-side storage.
 
 ## Recommended `.env` setup
 
@@ -262,7 +369,8 @@ server itself remains dependency-free.
 | `GET`  | `/logs`                         | Buffered structured logs.                                         |
 | `GET`  | `/errors`                       | Recent warning/error logs and per-account failures.               |
 | `GET`  | `/history`                      | Completed runs retained by this API process.                      |
-| `GET`  | `/accounts`                     | Safe summaries of configured accounts and recent run statistics.  |
+| `GET`  | `/accounts`                     | Safe summaries of all stored accounts and recent run statistics. |
+| `GET`  | `/proxies`                      | Safe proxy records with account usage counts.                    |
 | `GET`  | `/sessions`                     | Stored account/platform session metadata without secret contents. |
 | `GET`  | `/diagnostics`                  | List available error-capture directories.                         |
 | `GET`  | `/diagnostics/<capture>/<file>` | Download or view one diagnostic artifact.                         |
@@ -278,6 +386,10 @@ server itself remains dependency-free.
 | `POST`   | `/stop`            | Request graceful or forced process termination.         |
 | `POST`   | `/restart`         | Stop an active run, then start a new one.               |
 | `POST`   | `/shutdown`        | Stop the bot if needed and terminate the API process.   |
+| `POST`   | `/accounts/import` | Import or update accounts and proxy records from JSON.  |
+| `PATCH`  | `/accounts/:email/proxy` | Assign, replace, or detach an account proxy.       |
+| `PATCH`  | `/accounts/:email/status` | Enable or disable an account.                    |
+| `DELETE` | `/accounts/:email` | Permanently delete one account.                       |
 | `DELETE` | `/sessions/:email` | Delete only one account's mobile and desktop sessions.  |
 | `PUT`    | `/config`          | Replace the complete config after validation.           |
 | `PATCH`  | `/config`          | Deep-merge a partial config after validation.           |
@@ -320,6 +432,11 @@ console.log(data)
         "GET /errors",
         "GET /history",
         "GET /accounts",
+        "GET /proxies",
+        "POST /accounts/import",
+        "PATCH /accounts/:email/proxy",
+        "PATCH /accounts/:email/status",
+        "DELETE /accounts/:email",
         "GET /sessions",
         "GET /diagnostics",
         "GET /events",
@@ -694,10 +811,10 @@ should store the returned completion data in its own database.
 
 ### `GET /accounts`
 
-Returns account slots discovered from `ACCOUNT_<N>_EMAIL` variables in `.env`.
-Email addresses are returned in full for the local dashboard. Passwords,
-recovery addresses, TOTP secrets, and separate proxy username/password values
-are not returned; the configured proxy URL and port are included in the summary.
+Returns all accounts stored in `data/accounts.db`, including disabled accounts.
+Email addresses are returned in full for the dashboard. Passwords, recovery
+addresses, TOTP secrets, and separate proxy username/password values are not
+returned; safe proxy metadata and account status are included.
 
 **cURL**
 

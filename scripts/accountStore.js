@@ -239,6 +239,7 @@ export function importAccountBundle(projectRoot, input, options = {}) {
 
     try {
         db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;')
+        assertNoActiveJobs(db)
         const reconciliation = reconcileStoredProxies(db)
 
         const upsertProxy = db.prepare(`
@@ -450,6 +451,154 @@ export function listAccountRows(projectRoot) {
     }
 }
 
+function safeProxyRow(row) {
+    const parsed = parseProxyParts({ url: row.url, port: row.port })
+    return {
+        id: row.id,
+        label: row.label,
+        status: row.status,
+        url: parsed.host ? `${parsed.protocol}://${parsed.host}` : null,
+        port: Number(row.port),
+        proxyHttp: Boolean(row.proxy_http),
+        hasCredentials: Boolean(row.username || row.password),
+        accountCapacity: Number(row.account_capacity || 1),
+        accountCount: Number(row.account_count || 0),
+        egressIp: row.egress_ip || null,
+        cooldownSeconds: Number(row.cooldown_seconds || 0)
+    }
+}
+
+/**
+ * Returns all stored accounts, including disabled accounts, without secrets.
+ * This is intentionally separate from loadAccounts(), which only returns
+ * accounts eligible for a bot run.
+ */
+export function listManagedAccountRows(projectRoot) {
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath, { readOnly: true })
+    try {
+        return db
+            .prepare(
+                `
+                SELECT a.id, a.slot, a.email, a.status, a.use_proxy,
+                       p.id AS proxy_id, p.label AS proxy_label, p.status AS proxy_status,
+                       p.url AS proxy_url, p.port AS proxy_port, p.username AS proxy_username,
+                       p.password AS proxy_password, p.account_capacity,
+                       p.egress_ip, p.cooldown_seconds
+                FROM accounts a
+                LEFT JOIN proxies p ON p.id = a.proxy_id
+                ORDER BY COALESCE(a.slot, 2147483647), LOWER(a.email)
+                `
+            )
+            .all()
+            .map(row => {
+                const parsed = row.proxy_id ? parseProxyParts({ url: row.proxy_url, port: row.proxy_port }) : null
+                return {
+                    id: row.id,
+                    index: row.slot == null ? null : Number(row.slot),
+                    email: row.email,
+                    emailKey: row.email,
+                    status: row.status,
+                    useProxy: Boolean(row.use_proxy),
+                    proxy: row.proxy_id
+                        ? {
+                              id: row.proxy_id,
+                              label: row.proxy_label,
+                              status: row.proxy_status,
+                              url: parsed?.host ? `${parsed.protocol}://${parsed.host}` : null,
+                              port: Number(row.proxy_port),
+                              hasCredentials: Boolean(row.proxy_username || row.proxy_password),
+                              accountCapacity: Number(row.account_capacity || 1),
+                              egressIp: row.egress_ip || null,
+                              cooldownSeconds: Number(row.cooldown_seconds || 0)
+                          }
+                        : null
+                }
+            })
+    } finally {
+        db.close()
+    }
+}
+
+/** Returns proxy records and usage counts without proxy passwords. */
+export function listProxyRows(projectRoot) {
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath, { readOnly: true })
+    try {
+        return db
+            .prepare(
+                `
+                SELECT p.*, COUNT(a.id) AS account_count
+                FROM proxies p
+                LEFT JOIN accounts a ON a.proxy_id = p.id
+                GROUP BY p.id
+                ORDER BY LOWER(p.label)
+                `
+            )
+            .all()
+            .map(safeProxyRow)
+    } finally {
+        db.close()
+    }
+}
+
+/**
+ * Assigns an existing proxy to an account. Passing useProxy=false explicitly
+ * detaches the proxy and enables direct mode for that account.
+ */
+export function assignAccountProxy(projectRoot, email, input = {}) {
+    const normalizedEmail = text(email).toLowerCase()
+    if (!normalizedEmail || !normalizedEmail.includes('@')) fail('A valid account email is required.')
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('Proxy assignment must be a JSON object.')
+
+    const useProxy = input.useProxy !== false
+    const proxyId = text(input.proxyId ?? input.proxy_id)
+    const proxyLabel = text(input.proxyLabel ?? input.proxy_label)
+    if (proxyId && proxyLabel) fail('Provide proxyId or proxyLabel, not both.')
+    if (useProxy && !proxyId && !proxyLabel) fail('A proxyId or proxyLabel is required when useProxy is true.')
+
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath)
+    let accountId = null
+    try {
+        db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;')
+        assertNoActiveJobs(db)
+
+        const account = db.prepare('SELECT id, email FROM accounts WHERE LOWER(email) = LOWER(?)').get(normalizedEmail)
+        if (!account) fail(`Account not found: ${normalizedEmail}.`)
+        accountId = account.id
+
+        let selectedProxyId = null
+        if (useProxy) {
+            const proxy = proxyId
+                ? db.prepare('SELECT id, label, status FROM proxies WHERE id = ?').get(proxyId)
+                : db.prepare('SELECT id, label, status FROM proxies WHERE LOWER(label) = LOWER(?)').get(proxyLabel)
+            if (!proxy) fail(`Proxy not found: ${proxyId || proxyLabel}.`)
+            if (proxy.status !== 'active') fail(`Proxy ${proxy.label} is not active.`)
+            selectedProxyId = proxy.id
+        }
+
+        db.prepare('UPDATE accounts SET proxy_id = ?, use_proxy = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+            selectedProxyId,
+            useProxy ? 1 : 0,
+            account.id
+        )
+        db.exec('COMMIT')
+    } catch (error) {
+        try {
+            db.exec('ROLLBACK')
+        } catch {}
+        throw error
+    } finally {
+        db.close()
+    }
+
+    return listManagedAccountRows(projectRoot).find(row => row.id === accountId)
+}
+
 export function getAccountStoreStats(projectRoot) {
     const dbPath = resolveAccountsDbPath(projectRoot)
     ensureAccountsDatabase(dbPath)
@@ -503,11 +652,19 @@ export function setAccountStatus(projectRoot, email, status) {
     ensureAccountsDatabase(dbPath)
     const db = new DatabaseSync(dbPath)
     try {
+        db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;')
+        assertNoActiveJobs(db)
         const result = db
             .prepare('UPDATE accounts SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(email) = LOWER(?)')
             .run(status, email)
         if (!result.changes) fail(`Account not found: ${email}.`)
+        db.exec('COMMIT')
         return { email, status }
+    } catch (error) {
+        try {
+            db.exec('ROLLBACK')
+        } catch {}
+        throw error
     } finally {
         db.close()
     }

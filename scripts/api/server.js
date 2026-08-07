@@ -5,7 +5,15 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 import { ProcessManager } from './processManager.js'
-import { buildExcludedAccountsEnv, buildSingleAccountEnv, loadAccounts, mergeAccountStats } from './accounts.js'
+import { buildExcludedAccountsEnv, buildSingleAccountEnv, mergeAccountStats } from './accounts.js'
+import {
+    assignAccountProxy,
+    deleteAccountRecords,
+    importAccountBundle,
+    listManagedAccountRows,
+    listProxyRows,
+    setAccountStatus
+} from '../accountStore.js'
 import { validateConfig, deepMerge, readConfig, writeConfigAtomic } from './configEditor.js'
 import { readSchedule, writeSchedule } from './scheduleStore.js'
 import { deleteStoredSessions, listStoredSessions } from './sessionStore.js'
@@ -160,6 +168,36 @@ async function readJsonBody(req, limitBytes = 1_000_000) {
     })
 }
 
+function requireIdleForAccountMutation() {
+    const state = pm.getStatus().state
+    if (state !== 'idle') {
+        const error = new Error(`Account and proxy changes are disabled while the bot is ${state}. Stop the run first.`)
+        error.code = 'RUN_ACTIVE'
+        throw error
+    }
+}
+
+function decodeAccountEmailPath(pathname, suffix = '') {
+    const prefix = '/accounts/'
+    if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) return null
+    const encoded = pathname.slice(prefix.length, pathname.length - suffix.length)
+    if (!encoded || encoded.includes('/')) return null
+    let email
+    try {
+        email = decodeURIComponent(encoded).trim().toLowerCase()
+    } catch {
+        const error = new Error('The account email path is not valid URL encoding.')
+        error.code = 'BAD_REQUEST'
+        throw error
+    }
+    if (!email || email.length > 320 || !email.includes('@') || /[\u0000-\u001F\u007F]/.test(email)) {
+        const error = new Error('A valid account email is required in the URL.')
+        error.code = 'BAD_REQUEST'
+        throw error
+    }
+    return email
+}
+
 function handleEventStream(req, res, url) {
     res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -250,6 +288,11 @@ const requestHandler = async (req, res) => {
                     'GET /errors',
                     'GET /history',
                     'GET /accounts',
+                    'GET /proxies',
+                    'POST /accounts/import',
+                    'PATCH /accounts/:email/proxy',
+                    'PATCH /accounts/:email/status',
+                    'DELETE /accounts/:email',
                     'GET /sessions',
                     'GET /diagnostics',
                     'GET /events',
@@ -316,8 +359,86 @@ const requestHandler = async (req, res) => {
 
         // acc overv
         if (method === 'GET' && pathname === '/accounts') {
-            const accounts = mergeAccountStats(loadAccounts(), pm.getHistory().map(toHistoryRecord))
+            const accounts = mergeAccountStats(listManagedAccountRows(projectRoot), pm.getHistory().map(toHistoryRecord))
             return sendJson(res, 200, { accounts, count: accounts.length })
+        }
+
+        if (method === 'GET' && pathname === '/proxies') {
+            return sendJson(res, 200, { proxies: listProxyRows(projectRoot) })
+        }
+
+        if (method === 'POST' && pathname === '/accounts/import') {
+            requireIdleForAccountMutation()
+            const body = await readJsonBody(req, 5_000_000)
+            const bundle = body && body.bundle && typeof body.bundle === 'object' ? body.bundle : body
+            const result = importAccountBundle(projectRoot, bundle, {
+                restoreDeleted: Boolean(body?.restoreDeleted)
+            })
+            pm.note(
+                'info',
+                `Imported ${result.total} account(s) via API: ${result.inserted} inserted, ${result.updated} updated, ${result.proxies} proxy record(s).`
+            )
+            const { dbPath, ...safeResult } = result
+            void dbPath
+            return sendJson(res, 200, {
+                imported: true,
+                ...safeResult,
+                accounts: listManagedAccountRows(projectRoot),
+                proxies: listProxyRows(projectRoot)
+            })
+        }
+
+        const proxyPathEmail = decodeAccountEmailPath(pathname, '/proxy')
+        if (method === 'PATCH' && proxyPathEmail) {
+            requireIdleForAccountMutation()
+            const body = await readJsonBody(req)
+            let account
+            if (body.proxy && typeof body.proxy === 'object' && !Array.isArray(body.proxy)) {
+                const proxy = { ...body.proxy }
+                const label = String(proxy.label ?? body.proxyLabel ?? '').trim()
+                if (label) proxy.label = label
+                const accountInput = { email: proxyPathEmail, useProxy: true }
+                if (label) accountInput.proxyLabel = label
+                else accountInput.proxy = proxy
+                const result = importAccountBundle(projectRoot, {
+                    accounts: [accountInput],
+                    proxies: label ? [proxy] : [],
+                    allowDirectAccounts: false
+                })
+                account = listManagedAccountRows(projectRoot).find(
+                    row => row.email.toLowerCase() === proxyPathEmail.toLowerCase()
+                )
+                pm.note('info', `Proxy replaced for ${proxyPathEmail} via API.`)
+                return sendJson(res, 200, { updated: true, account, import: { inserted: result.inserted, updated: result.updated } })
+            }
+
+            account = assignAccountProxy(projectRoot, proxyPathEmail, body)
+            pm.note('info', `Proxy assignment updated for ${proxyPathEmail} via API.`)
+            return sendJson(res, 200, { updated: true, account })
+        }
+
+        const statusPathEmail = decodeAccountEmailPath(pathname, '/status')
+        if (method === 'PATCH' && statusPathEmail) {
+            requireIdleForAccountMutation()
+            const body = await readJsonBody(req)
+            const status = String(body?.status ?? '').trim().toLowerCase()
+            const result = setAccountStatus(projectRoot, statusPathEmail, status)
+            pm.note('info', `Account ${statusPathEmail} status changed to ${status} via API.`)
+            return sendJson(res, 200, {
+                updated: true,
+                ...result,
+                account: listManagedAccountRows(projectRoot).find(
+                    row => row.email.toLowerCase() === statusPathEmail.toLowerCase()
+                )
+            })
+        }
+
+        const deletePathEmail = decodeAccountEmailPath(pathname)
+        if (method === 'DELETE' && deletePathEmail) {
+            requireIdleForAccountMutation()
+            const result = deleteAccountRecords(projectRoot, [deletePathEmail])
+            pm.note('info', `Deleted account ${deletePathEmail} via API.`)
+            return sendJson(res, 200, { deleted: true, ...result, dbPath: undefined })
         }
 
         // session list
@@ -578,6 +699,12 @@ const requestHandler = async (req, res) => {
         return sendJson(res, 404, { error: 'Not found', path: pathname })
     } catch (err) {
         if (err && (err.code === 'BAD_JSON' || err.code === 'BODY_TOO_LARGE')) {
+            return sendJson(res, 400, { error: err.message, code: err.code })
+        }
+        if (err?.code === 'RUN_ACTIVE') {
+            return sendJson(res, 409, { error: err.message, code: err.code })
+        }
+        if (err?.code === 'BAD_REQUEST') {
             return sendJson(res, 400, { error: err.message, code: err.code })
         }
         log('ERROR', 'Unhandled request error:', err instanceof Error ? err.stack : err)

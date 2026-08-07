@@ -5,7 +5,15 @@ import path from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 
-import { deleteAccountRecords, getAccountStoreStats, importAccountBundle, listAccountRows } from './accountStore.js'
+import {
+    assignAccountProxy,
+    deleteAccountRecords,
+    getAccountStoreStats,
+    importAccountBundle,
+    listAccountRows,
+    listManagedAccountRows,
+    listProxyRows
+} from './accountStore.js'
 import { JobStore } from './queue/jobStore.js'
 
 const TEST_DB_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
@@ -240,6 +248,32 @@ test('explicit direct mode imports and schedules accounts without a proxy', () =
         } finally {
             store.close()
         }
+    })
+})
+
+test('lists safe management rows and can reassign or detach an account proxy', () => {
+    withTemporaryAccountStore(() => {
+        importAccountBundle(process.cwd(), {
+            proxies: [
+                { label: 'proxy-one', url: '192.0.2.81', port: 8081 },
+                { label: 'proxy-two', url: '192.0.2.82', port: 8082, username: 'user', password: 'secret' }
+            ],
+            accounts: [{ email: 'managed@example.com', password: 'account-secret', proxyLabel: 'proxy-one' }]
+        })
+
+        const proxies = listProxyRows(process.cwd())
+        assert.deepEqual(proxies.map(proxy => proxy.label), ['proxy-one', 'proxy-two'])
+        assert.equal(Object.hasOwn(proxies[1], 'password'), false)
+        assert.equal(proxies[1].hasCredentials, true)
+
+        const reassigned = assignAccountProxy(process.cwd(), 'managed@example.com', { proxyLabel: 'proxy-two' })
+        assert.equal(reassigned.proxy.label, 'proxy-two')
+        assert.equal(reassigned.useProxy, true)
+
+        const detached = assignAccountProxy(process.cwd(), 'managed@example.com', { useProxy: false })
+        assert.equal(detached.proxy, null)
+        assert.equal(detached.useProxy, false)
+        assert.equal(listManagedAccountRows(process.cwd())[0].email, 'managed@example.com')
     })
 })
 
