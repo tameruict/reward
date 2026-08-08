@@ -2,7 +2,7 @@ import net from 'node:net'
 import rebrowser from 'patchright'
 
 import { buildProxyConfig, getDirname, getProjectRoot, loadAccounts } from '../utils.js'
-import { parseProxyParts } from '../proxyIdentity.js'
+import { parseProxyParts } from '../accounts/proxy.js'
 
 const projectRoot = getProjectRoot(getDirname(import.meta.url))
 const accounts = loadAccounts(projectRoot)

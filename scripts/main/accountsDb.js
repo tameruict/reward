@@ -6,9 +6,9 @@ import {
     importAccountBundle,
     listAccountRows,
     setAccountStatus
-} from '../accountStore.js'
-import { generateAccountsDbKey } from '../accountSecrets.js'
-import { loadAccountImportFile } from '../accountImport.js'
+} from '../accounts/store.js'
+import { generateAccountsDbKey } from '../accounts/secrets.js'
+import { loadAccountImportFile } from '../accounts/import.js'
 
 const projectRoot = getProjectRoot(getDirname(import.meta.url))
 loadEnvFile(projectRoot)

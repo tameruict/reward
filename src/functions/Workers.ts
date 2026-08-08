@@ -5,6 +5,41 @@ import type { DashboardData, PunchCard, BasePromotion } from '../interface/Dashb
 import type { AppDashboardData } from '../interface/AppDashBoardData'
 import type { QuestChild, ParentQuest } from '../browser/ReactFunc'
 
+const SUPPORTED_ACTIVITY_TYPES = new Set(['urlreward', 'search', 'welcometour'])
+
+export function normaliseActivityType(raw: unknown): string {
+    const values = String(raw ?? '')
+        .toLowerCase()
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean)
+
+    return values.find(value => SUPPORTED_ACTIVITY_TYPES.has(value)) ?? values[0] ?? ''
+}
+
+function getActivityType(promotion: BasePromotion): string {
+    const primary = normaliseActivityType(promotion.promotionType)
+    if (SUPPORTED_ACTIVITY_TYPES.has(primary)) return primary
+
+    const attributes = promotion.attributes
+    if (attributes && typeof attributes === 'object') {
+        const fromAttributes = normaliseActivityType((attributes as Record<string, unknown>).type)
+        if (fromAttributes) return fromAttributes
+    }
+
+    return primary
+}
+
+function dateKey(value: string): string | null {
+    const slash = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+    if (slash) return `${slash[3]!}-${slash[1]!.padStart(2, '0')}-${slash[2]!.padStart(2, '0')}`
+
+    const iso = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+    if (iso) return `${iso[1]!}-${iso[2]!.padStart(2, '0')}-${iso[3]!.padStart(2, '0')}`
+
+    return null
+}
+
 export class Workers {
     public bot: MicrosoftRewardsBot
 
@@ -14,9 +49,32 @@ export class Workers {
 
     public async doDailySet(data: DashboardData) {
         const todayKey = this.bot.utils.getFormattedDate()
-        const todayData = data.dashboard.dailySetPromotions[todayKey]
+        const dailySets = data.dashboard.dailySetPromotions ?? {}
+        const todayIso = dateKey(todayKey)
+        const todayData =
+            dailySets[todayKey] ??
+            (todayIso
+                ? Object.entries(dailySets).find(([key]) => dateKey(key) === todayIso)?.[1]
+                : undefined)
 
-        const activitiesUncompleted = todayData?.filter(x => !x?.complete && x.pointProgressMax > 0) ?? []
+        const activitiesUncompleted =
+            todayData?.filter(x => {
+                if (x?.complete) return false
+
+                // The Rewards API has returned daily items with a zero/missing
+                // pointProgressMax even though they still have a live action/hash.
+                // Keep those tasks in the pipeline; UrlReward will make the final
+                // creditability decision after resolving the live offer.
+                return Number(x.pointProgressMax ?? 0) > 0 || !!x.hash || !!getActivityType(x)
+            }) ?? []
+
+        if (!todayData) {
+            this.bot.logger.warn(
+                this.bot.isMobile,
+                'DAILY-SET',
+                `No Daily Set data found for ${todayKey} | availableDates=${Object.keys(dailySets).join(',') || 'none'}`
+            )
+        }
 
         if (!activitiesUncompleted.length) {
             this.bot.logger.info(this.bot.isMobile, 'DAILY-SET', 'All "Daily Set" items have already been completed')
@@ -45,11 +103,14 @@ export class Workers {
         const activitiesUncompleted: BasePromotion[] =
             morePromotions?.filter(x => {
                 if (x.complete) return false
-                if (x.pointProgressMax <= 0) return false
                 if (x.exclusiveLockedFeatureStatus === 'locked') return false
-                if (!x.promotionType) return false
+                if (!getActivityType(x)) return false
                 if (x.priority < 0 && x.exclusiveLockedFeatureStatus !== 'unlocked') return false
-                if (x.attributes?.promotional === 'True') return false
+                if (String(x.attributes?.promotional ?? '').toLowerCase() === 'true') return false
+
+                // Do not discard an offer merely because the API omitted its
+                // progress fields. The live hash/type is enough to attempt it.
+                if (Number(x.pointProgressMax ?? 0) <= 0 && !x.hash) return false
                 return true
             }) ?? []
 
@@ -130,18 +191,17 @@ export class Workers {
         let parents: ParentQuest[]
 
         try {
-            const earn = await page.request.get(URLs.rewards.earn)
-            if (!earn.ok()) {
-                this.bot.logger.warn(this.bot.isMobile, 'PUNCHCARD', `/earn ${earn.status()} - cannot list quests`)
+            const html = await this.bot.browser.func.getRewardsPageHtml(URLs.rewards.earn, '/earn')
+            if (!html) {
+                this.bot.logger.warn(this.bot.isMobile, 'PUNCHCARD', '/earn unavailable - cannot list quests')
                 return
             }
-            const html = await earn.text()
             parents = this.bot.browser.react.snapshotQuestList(html)
 
             // Some deploys render the carousel only on /dashboard
             if (!parents.length) {
-                const dash = await page.request.get(URLs.rewards.dashboard)
-                if (dash.ok()) parents = this.bot.browser.react.snapshotQuestList(html, await dash.text())
+                const dashboard = await this.bot.browser.func.getRewardsPageHtml(URLs.rewards.dashboard, '/dashboard')
+                if (dashboard) parents = this.bot.browser.react.snapshotQuestList(html, dashboard)
             }
         } catch (error) {
             this.bot.logger.warn(
@@ -219,16 +279,13 @@ export class Workers {
 
         let questChildren: QuestChild[]
         try {
-            const res = await page.request.get(URLs.rewards.quest(parentId))
-            if (!res.ok()) {
-                this.bot.logger.warn(
-                    this.bot.isMobile,
-                    'PUNCHCARD',
-                    `Quest page ${res.status()} for "${title}" - skipping`
-                )
+            const questUrl = URLs.rewards.quest(parentId)
+            const html = await this.bot.browser.func.getRewardsPageHtml(questUrl, `/earn/quest/${parentId}`)
+            if (!html) {
+                this.bot.logger.warn(this.bot.isMobile, 'PUNCHCARD', `Quest page unavailable for "${title}" - skipping`)
                 return
             }
-            questChildren = this.bot.browser.react.snapshotQuestPage(await res.text())
+            questChildren = this.bot.browser.react.snapshotQuestPage(html)
         } catch (error) {
             this.bot.logger.warn(
                 this.bot.isMobile,
@@ -238,14 +295,54 @@ export class Workers {
             return
         }
 
+        const apiChildById = new Map(
+            (apiCard?.childPromotions ?? []).filter(c => c.offerId).map(c => [c.offerId, c] as const)
+        )
+
+        // Quest pages are streamed RSC responses and may omit children even
+        // though /userinfo already returned them. Merge the API list into the
+        // page snapshot so a partial HTML response cannot silently lose tasks.
+        const mergedChildren = new Map<string, QuestChild>()
+        for (const child of questChildren) {
+            const api = apiChildById.get(child.offerId)
+            const hash = child.hash ?? api?.hash ?? null
+            const isCompleted = child.isCompleted || !!api?.complete
+            const isLocked = child.isLocked || api?.exclusiveLockedFeatureStatus === 'locked'
+            const isDisabled = child.isDisabled
+
+            mergedChildren.set(child.offerId, {
+                ...child,
+                hash,
+                points: child.points || api?.pointProgressMax || 0,
+                isCompleted,
+                isLocked,
+                reportable: !!hash && !isCompleted && !isLocked && !isDisabled
+            })
+        }
+
+        for (const api of apiChildById.values()) {
+            if (mergedChildren.has(api.offerId)) continue
+
+            const hash = api.hash ?? null
+            const isCompleted = !!api.complete
+            const isLocked = api.exclusiveLockedFeatureStatus === 'locked'
+            mergedChildren.set(api.offerId, {
+                offerId: api.offerId,
+                hash,
+                points: api.pointProgressMax ?? 0,
+                isCompleted,
+                isLocked,
+                isDisabled: false,
+                reportable: !!hash && !isCompleted && !isLocked
+            })
+        }
+
+        questChildren = [...mergedChildren.values()]
         if (!questChildren.length) {
             this.bot.logger.info(this.bot.isMobile, 'PUNCHCARD', `No actionable children rendered for "${title}"`)
             return
         }
 
-        const apiChildById = new Map(
-            (apiCard?.childPromotions ?? []).filter(c => c.offerId).map(c => [c.offerId, c] as const)
-        )
         const ordered = [...questChildren].sort(
             (a, b) =>
                 (apiChildById.get(a.offerId)?.priority ?? Number.MAX_SAFE_INTEGER) -
@@ -365,7 +462,7 @@ export class Workers {
     private async solveActivities(activities: BasePromotion[]) {
         for (const activity of activities) {
             try {
-                const type = activity.promotionType?.toLowerCase() ?? ''
+                const type = getActivityType(activity)
                 const name = activity.name?.toLowerCase() ?? ''
                 const offerId = (activity as BasePromotion).offerId
 

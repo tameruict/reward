@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { importAccountBundle } from '../accountStore.js'
+import { importAccountBundle } from '../accounts/store.js'
 import { parseLogLine } from '../api/logParser.js'
 import { dispatchAvailableJobs } from './dispatcher.js'
 import { createJobConsoleLogger, formatQueueLog, maskEmail } from './jobLogger.js'

@@ -1,5 +1,5 @@
 import { getDirname, getProjectRoot, loadEnvFile, loadAccountsFromEnv, log } from '../utils.js'
-import { importAccountBundle } from '../accountStore.js'
+import { importAccountBundle } from '../accounts/store.js'
 
 const __dirname = getDirname(import.meta.url)
 const projectRoot = getProjectRoot(__dirname)

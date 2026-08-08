@@ -16,6 +16,8 @@
         "ts-start": "ts-node ./src/index.ts",
         "dev": "ts-node ./src/index.ts -dev",
         "api": "node ./scripts/api/server.js",
+        "vps:api": "node ./scripts/api/server.js",
+        "dashboard": "npm --prefix ./local-dashboard start",
         "kill-chrome-win": "powershell -Command \"Get-Process | Where-Object { $_.MainModule.FileVersionInfo.FileDescription -eq 'Google Chrome for Testing' } | ForEach-Object { Stop-Process -Id $_.Id -Force }\"",
         "create-docker": "docker build -t microsoft-rewards-script-docker .",
         "lint": "eslint .",

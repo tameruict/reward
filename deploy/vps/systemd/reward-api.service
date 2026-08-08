@@ -1,0 +1,18 @@
+[Unit]
+Description=Reward worker Control API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reward
+WorkingDirectory=/opt/reward
+EnvironmentFile=/opt/reward/.env
+ExecStart=/usr/bin/node /opt/reward/scripts/api/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

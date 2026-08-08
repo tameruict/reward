@@ -306,10 +306,29 @@ curl --request POST \
   --data '{"accountIndex":2}'
 ```
 
-For a ready-made web interface, use the supported and endorsed
-[Rewards Dashboard](https://github.com/mgrimace/rewards-dashboard). It connects
-to this Control API to manage runs, accounts, schedules, logs, points, and
-related script settings.
+For the local web interface, use the [local Account Manager](rewards-dashboard/README.md).
+It connects to this Control API through the local machine and keeps the worker,
+account database, and secrets on the VPS.
+
+## Project layout
+
+The runtime is split by responsibility:
+
+```text
+src/                         worker implementation
+scripts/api/                 VPS Control API and remote control routes
+scripts/accounts/            account database, secret encryption, proxy logic
+scripts/queue/               queue stores, scheduler and worker coordination
+scripts/main/                operational CLI commands
+scripts/docker/              Docker entrypoint and health scripts
+deploy/vps/                  VPS env template and systemd service
+deploy/local/                local dashboard deployment notes
+local-dashboard/             local-only account management web app
+```
+
+Use `deploy/vps/README.md` for VPS setup and `deploy/local/README.md` for the
+local dashboard. Keep `.env`, `data/`, `sessions/`, and account import files
+outside Git.
 
 ---
 

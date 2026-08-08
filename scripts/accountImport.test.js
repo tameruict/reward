@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { loadAccountImportFile } from './accountImport.js'
+import { loadAccountImportFile } from './accounts/import.js'
 
 function withImportFile(content, run) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rewards-account-import-test-'))

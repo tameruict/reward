@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 
-import { cleanupProxyRecords, getAccountStoreStats, importAccountBundle } from './accountStore.js'
+import { cleanupProxyRecords, getAccountStoreStats, importAccountBundle } from './accounts/store.js'
 
 test('proxy cleanup merges used legacy duplicates and HTTP mode updates in place', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rewards-proxy-cleanup-'))

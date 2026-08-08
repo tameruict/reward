@@ -257,6 +257,57 @@ class BrowserFunc {
             throw error;
         }
     }
+    getActiveRewardsPage() {
+        const page = this.bot.isMobile ? this.bot.mainMobilePage : this.bot.mainDesktopPage;
+        return page && !page.isClosed() ? page : null;
+    }
+    /**
+     * Fetch a Rewards page through the active browser context. The RSC payload
+     * is the source of truth for live hashes; using the page request keeps the
+     * current account cookies and proxy/session context attached.
+     */
+    async getRewardsPageHtml(url, route) {
+        const page = this.getActiveRewardsPage();
+        if (!page) {
+            this.bot.logger.debug(this.bot.isMobile, 'REWARDS-PAGE', `No active page available for ${route}`);
+            return null;
+        }
+        try {
+            const response = await page.request.get(url, { timeout: 20000 });
+            if (response.ok())
+                return await response.text();
+            this.bot.logger.debug(this.bot.isMobile, 'REWARDS-PAGE', `Failed to fetch ${route} | status=${response.status()}`);
+        }
+        catch (error) {
+            this.bot.logger.debug(this.bot.isMobile, 'REWARDS-PAGE', `Browser fetch failed for ${route} | ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return null;
+    }
+    /** Refresh the streamed /earn and /dashboard offer snapshot together. */
+    async refreshEarnSnapshot() {
+        const pages = await Promise.all([
+            this.getRewardsPageHtml(urls_1.URLs.rewards.earn, '/earn'),
+            this.getRewardsPageHtml(urls_1.URLs.rewards.dashboard, '/dashboard')
+        ]);
+        const html = pages.filter((value) => value !== null).join('\n');
+        return html ? this.bot.browser.react.snapshotPage(html) : null;
+    }
+    /** Resolve an offer missing from the initial streamed page response. */
+    async ensureOffer(offerId) {
+        const cached = this.bot.reactSnapshot?.offers.find(offer => offer.offerId === offerId);
+        if (cached)
+            return cached;
+        this.bot.logger.debug(this.bot.isMobile, 'EARN-SNAPSHOT', `${offerId} absent from cached snapshot; refetching /earn and /dashboard`);
+        const refreshed = await this.refreshEarnSnapshot();
+        if (!refreshed)
+            return null;
+        const live = refreshed.offers.find(offer => offer.offerId === offerId) ?? null;
+        if (!this.bot.reactSnapshot || refreshed.offers.length >= this.bot.reactSnapshot.offers.length) {
+            this.bot.reactSnapshot = refreshed;
+        }
+        this.bot.logger.debug(this.bot.isMobile, 'EARN-SNAPSHOT', `Refreshed Rewards snapshot | offers=${refreshed.offers.length} | ${offerId} found=${!!live}`);
+        return live;
+    }
     async bootstrap(page) {
         try {
             const timeoutMs = Math.max(this.bot.utils.stringToNumber(this.bot.config.globalTimeout), 60000);

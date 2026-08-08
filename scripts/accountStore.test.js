@@ -13,7 +13,7 @@ import {
     listAccountRows,
     listManagedAccountRows,
     listProxyRows
-} from './accountStore.js'
+} from './accounts/store.js'
 import { JobStore } from './queue/jobStore.js'
 
 const TEST_DB_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
