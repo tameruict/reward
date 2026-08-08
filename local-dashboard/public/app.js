@@ -181,7 +181,7 @@ function renderRows() {
         <td><span class="auth-state ${account.hasTotp ? "ok" : "pending"}">${account.hasTotp ? "Đã lưu" : "Chưa có"}</span></td>
         <td>${pointCheckCell(account)}</td>
         <td class="muted">${escapeHtml(formatDate(account.updatedAt || account.updated_at))}</td>
-        <td class="col-actions"><button class="detail-button" data-detail-email="${escapeAttr(account.email)}">◉ Xem</button></td>
+        <td class="col-actions"><button class="detail-button" data-detail-email="${escapeAttr(account.email)}">◉ Xem</button><button class="detail-button danger" data-delete-email="${escapeAttr(account.email)}">Xóa</button></td>
       </tr>`;
     }).join("");
   }
@@ -390,6 +390,18 @@ async function deleteSelected() {
   try { await api.deleteAccounts(emails); state.selected.clear(); showToast(`Đã xóa ${emails.length} account.`); await loadData(); } catch (error) { showToast(error.message, "error"); }
 }
 
+async function deleteSingleAccount(email) {
+  if (!email || !window.confirm(`Xóa vĩnh viễn ${email}?`)) return;
+  try {
+    await api.deleteAccount(email);
+    state.selected.delete(email);
+    showToast(`Đã xóa ${email}.`);
+    await loadData();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 async function disableSelected() {
   const emails = [...state.selected];
   if (!emails.length) return showToast("Chưa chọn account.", "warning");
@@ -418,7 +430,15 @@ function bindEvents() {
     renderRows();
   });
   $("#accountRows").addEventListener("change", (event) => { const email = event.target.dataset.selectEmail; if (!email) return; event.target.checked ? state.selected.add(email) : state.selected.delete(email); renderRows(); });
-  $("#accountRows").addEventListener("click", (event) => { const accountId = event.target.closest("[data-check-points]")?.dataset.checkPoints; if (accountId) checkAccountPoints(accountId); });
+  $("#accountRows").addEventListener("click", (event) => {
+    const deleteEmail = event.target.closest("[data-delete-email]")?.dataset.deleteEmail;
+    if (deleteEmail) {
+      void deleteSingleAccount(deleteEmail);
+      return;
+    }
+    const accountId = event.target.closest("[data-check-points]")?.dataset.checkPoints;
+    if (accountId) checkAccountPoints(accountId);
+  });
   $("#deleteSelected").addEventListener("click", deleteSelected);
   $("#disableSelected").addEventListener("click", disableSelected);
   $("#clearLog").addEventListener("click", () => { $("#logOutput").textContent = "Chưa có log mới."; });
