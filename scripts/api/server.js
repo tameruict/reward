@@ -10,10 +10,12 @@ import { buildAllAccountsEnv, buildExcludedAccountsEnv, buildSingleAccountEnv, m
 import {
     assignAccountProxy,
     deleteAccountRecords,
+    deleteProxyRecord,
     importAccountBundle,
     listManagedAccountRows,
     listProxyRows,
-    setAccountStatus
+    setAccountStatus,
+    setProxyStatus
 } from '../accounts/store.js'
 import { validateConfig, deepMerge, readConfig, writeConfigAtomic } from './configEditor.js'
 import { readSchedule, writeSchedule } from './scheduleStore.js'
@@ -375,6 +377,9 @@ const requestHandler = async (req, res) => {
                     'GET /history',
                     'GET /accounts',
                     'GET /proxies',
+                    'POST /proxies',
+                    'PATCH /proxies/:id/status',
+                    'DELETE /proxies/:id',
                     'POST /accounts/import',
                     'PATCH /accounts/:email/proxy',
                     'PATCH /accounts/:email/status',
@@ -455,6 +460,17 @@ const requestHandler = async (req, res) => {
 
         if (method === 'GET' && pathname === '/proxies') {
             return sendJson(res, 200, { proxies: listProxyRows(projectRoot) })
+        }
+
+        if (method === 'POST' && pathname === '/proxies') {
+            requireIdleForAccountMutation()
+            const body = await readJsonBody(req)
+            const proxy = body?.proxy && typeof body.proxy === 'object' ? body.proxy : body
+            const result = importAccountBundle(projectRoot, { proxies: [proxy], accounts: [] })
+            pm.note('info', `Created or updated proxy ${proxy?.label || '(unnamed)'} via API.`)
+            const { dbPath, ...safeResult } = result
+            void dbPath
+            return sendJson(res, 200, { created: true, ...safeResult, proxies: listProxyRows(projectRoot) })
         }
 
         if (method === 'POST' && pathname === '/accounts/import') {
@@ -551,6 +567,23 @@ const requestHandler = async (req, res) => {
                     row => row.email.toLowerCase() === statusPathEmail.toLowerCase()
                 )
             })
+        }
+
+        const proxyStatusMatch = pathname.match(/^\/proxies\/([^/]+)\/status$/)
+        if (method === 'PATCH' && proxyStatusMatch) {
+            requireIdleForAccountMutation()
+            const body = await readJsonBody(req)
+            const result = setProxyStatus(projectRoot, decodeURIComponent(proxyStatusMatch[1]), body?.status)
+            pm.note('info', `Proxy ${result.label} status changed to ${result.status} via API.`)
+            return sendJson(res, 200, { updated: true, ...result })
+        }
+
+        const proxyDeleteMatch = pathname.match(/^\/proxies\/([^/]+)$/)
+        if (method === 'DELETE' && proxyDeleteMatch) {
+            requireIdleForAccountMutation()
+            const result = deleteProxyRecord(projectRoot, decodeURIComponent(proxyDeleteMatch[1]))
+            pm.note('info', `Deleted proxy ${result.label} via API.`)
+            return sendJson(res, 200, result)
         }
 
         if (method === 'DELETE' && pathname === '/accounts') {

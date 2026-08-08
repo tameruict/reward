@@ -410,10 +410,13 @@ server itself remains dependency-free.
 | `POST`   | `/restart`         | Stop an active run, then start a new one.               |
 | `POST`   | `/shutdown`        | Stop the bot if needed and terminate the API process.   |
 | `POST`   | `/accounts/import` | Import or update accounts and proxy records from JSON.  |
+| `POST`   | `/proxies` | Create or update one proxy record.                     |
 | `PATCH`  | `/accounts/:email/proxy` | Assign, replace, or detach an account proxy.       |
 | `PATCH`  | `/accounts/:email/status` | Enable or disable an account.                    |
+| `PATCH`  | `/proxies/:id/status` | Enable or disable one proxy.                         |
 | `DELETE` | `/accounts` | Permanently delete multiple accounts atomically.      |
 | `DELETE` | `/accounts/:email` | Permanently delete one account.                       |
+| `DELETE` | `/proxies/:id` | Delete an unused proxy record.                         |
 | `DELETE` | `/sessions/:email` | Delete only one account's mobile and desktop sessions.  |
 | `PUT`    | `/config`          | Replace the complete config after validation.           |
 | `PATCH`  | `/config`          | Deep-merge a partial config after validation.           |
@@ -458,10 +461,13 @@ console.log(data)
         "GET /accounts",
         "GET /proxies",
         "POST /accounts/import",
+        "POST /proxies",
         "PATCH /accounts/:email/proxy",
         "PATCH /accounts/:email/status",
+        "PATCH /proxies/:id/status",
         "DELETE /accounts",
         "DELETE /accounts/:email",
+        "DELETE /proxies/:id",
         "GET /sessions",
         "GET /diagnostics",
         "GET /events",

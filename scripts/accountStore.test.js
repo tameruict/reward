@@ -8,11 +8,13 @@ import { DatabaseSync } from 'node:sqlite'
 import {
     assignAccountProxy,
     deleteAccountRecords,
+    deleteProxyRecord,
     getAccountStoreStats,
     importAccountBundle,
     listAccountRows,
     listManagedAccountRows,
-    listProxyRows
+    listProxyRows,
+    setProxyStatus
 } from './accounts/store.js'
 import { JobStore } from './queue/jobStore.js'
 
@@ -274,6 +276,39 @@ test('lists safe management rows and can reassign or detach an account proxy', (
         assert.equal(detached.proxy, null)
         assert.equal(detached.useProxy, false)
         assert.equal(listManagedAccountRows(process.cwd())[0].email, 'managed@example.com')
+    })
+})
+
+test('proxy management supports proxy-only creation, status changes, and safe deletion', () => {
+    withTemporaryAccountStore(() => {
+        importAccountBundle(process.cwd(), {
+            proxies: [{ label: 'assigned-proxy', url: '192.0.2.91', port: 8091 }],
+            accounts: [{ email: 'assigned@example.com', password: 'secret', proxyLabel: 'assigned-proxy' }]
+        })
+
+        importAccountBundle(process.cwd(), {
+            proxies: [{ label: 'unused-proxy', url: '192.0.2.92', port: 8092 }],
+            accounts: []
+        })
+
+        const rows = listProxyRows(process.cwd())
+        const assigned = rows.find(proxy => proxy.label === 'assigned-proxy')
+        const unused = rows.find(proxy => proxy.label === 'unused-proxy')
+        assert.ok(assigned)
+        assert.ok(unused)
+
+        assert.throws(
+            () => deleteProxyRecord(process.cwd(), assigned.id),
+            /while 1 account\(s\) are assigned/
+        )
+
+        const disabled = setProxyStatus(process.cwd(), unused.id, 'disabled')
+        assert.equal(disabled.status, 'disabled')
+        assert.equal(listProxyRows(process.cwd()).find(proxy => proxy.id === unused.id).status, 'disabled')
+
+        const deleted = deleteProxyRecord(process.cwd(), unused.id)
+        assert.equal(deleted.deleted, true)
+        assert.equal(listProxyRows(process.cwd()).some(proxy => proxy.id === unused.id), false)
     })
 })
 

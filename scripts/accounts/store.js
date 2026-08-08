@@ -78,12 +78,14 @@ function normalizeProxy(raw, fallbackLabel) {
 function normalizeBundle(input) {
     const bundle = Array.isArray(input) ? { accounts: input } : input
     if (!bundle || typeof bundle !== 'object') fail('Import file must contain an object or an account array.')
-    if (!Array.isArray(bundle.accounts) || !bundle.accounts.length)
-        fail('Import file must contain a non-empty accounts array.')
+    if (bundle.accounts != null && !Array.isArray(bundle.accounts)) fail('accounts must be an array.')
     if (bundle.proxies != null && !Array.isArray(bundle.proxies)) fail('proxies must be an array.')
+    const accounts = bundle.accounts ?? []
+    const proxies = bundle.proxies ?? []
+    if (!accounts.length && !proxies.length) fail('Import file must contain accounts or proxies.')
     return {
-        proxies: bundle.proxies ?? [],
-        accounts: bundle.accounts,
+        proxies,
+        accounts,
         autoAssignStoredProxies: Boolean(bundle.autoAssignStoredProxies),
         allowDirectAccounts: Boolean(bundle.allowDirectAccounts)
     }
@@ -539,6 +541,56 @@ export function listProxyRows(projectRoot) {
             )
             .all()
             .map(safeProxyRow)
+    } finally {
+        db.close()
+    }
+}
+
+export function setProxyStatus(projectRoot, proxyId, status) {
+    const normalizedId = text(proxyId)
+    const normalizedStatus = text(status).toLowerCase()
+    if (!normalizedId) fail('A proxy id is required.')
+    if (!PROXY_STATUSES.has(normalizedStatus)) fail(`Invalid proxy status: ${normalizedStatus}.`)
+
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath)
+    try {
+        db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;')
+        assertNoActiveJobs(db)
+        const proxy = db.prepare('SELECT id, label FROM proxies WHERE id = ?').get(normalizedId)
+        if (!proxy) fail(`Proxy not found: ${normalizedId}.`)
+        db.prepare('UPDATE proxies SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(normalizedStatus, normalizedId)
+        db.exec('COMMIT')
+        return { id: proxy.id, label: proxy.label, status: normalizedStatus }
+    } catch (error) {
+        try { db.exec('ROLLBACK') } catch {}
+        throw error
+    } finally {
+        db.close()
+    }
+}
+
+export function deleteProxyRecord(projectRoot, proxyId) {
+    const normalizedId = text(proxyId)
+    if (!normalizedId) fail('A proxy id is required.')
+
+    const dbPath = resolveAccountsDbPath(projectRoot)
+    ensureAccountsDatabase(dbPath)
+    const db = new DatabaseSync(dbPath)
+    try {
+        db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;')
+        assertNoActiveJobs(db)
+        const proxy = db.prepare('SELECT id, label FROM proxies WHERE id = ?').get(normalizedId)
+        if (!proxy) fail(`Proxy not found: ${normalizedId}.`)
+        const usage = Number(db.prepare('SELECT COUNT(*) AS value FROM accounts WHERE proxy_id = ?').get(normalizedId).value)
+        if (usage) fail(`Cannot delete proxy ${proxy.label} while ${usage} account(s) are assigned. Detach or reassign them first.`)
+        db.prepare('DELETE FROM proxies WHERE id = ?').run(normalizedId)
+        db.exec('COMMIT')
+        return { id: proxy.id, label: proxy.label, deleted: true }
+    } catch (error) {
+        try { db.exec('ROLLBACK') } catch {}
+        throw error
     } finally {
         db.close()
     }

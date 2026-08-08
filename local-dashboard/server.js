@@ -160,6 +160,10 @@ async function handleApi(req, res, url) {
     return forward(res, "GET", "/proxies");
   }
 
+  if (pathname === "/api/proxies" && method === "POST") {
+    return forward(res, "POST", "/proxies", await readJsonBody(req));
+  }
+
   if (pathname === "/api/point-checks" && method === "GET") {
     return client
       .get("/accounts")
@@ -220,6 +224,16 @@ async function handleApi(req, res, url) {
 
   if (pathname === "/api/accounts" && method === "DELETE") {
     return forward(res, "DELETE", "/accounts", await readJsonBody(req));
+  }
+
+  const proxyStatusMatch = pathname.match(/^\/api\/proxies\/([^/]+)\/status$/);
+  if (proxyStatusMatch && method === "PATCH") {
+    return forward(res, "PATCH", `/proxies/${proxyStatusMatch[1]}/status`, await readJsonBody(req));
+  }
+
+  const proxyDeleteMatch = pathname.match(/^\/api\/proxies\/([^/]+)$/);
+  if (proxyDeleteMatch && method === "DELETE") {
+    return forward(res, "DELETE", `/proxies/${proxyDeleteMatch[1]}`);
   }
 
   const accountMatch = pathname.match(/^\/api\/accounts\/([^/]+)$/);

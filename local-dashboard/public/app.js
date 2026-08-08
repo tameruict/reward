@@ -10,6 +10,7 @@ const state = {
   search: "",
   status: "all",
   health: null,
+  activeView: "accounts",
 };
 
 const checkingPoints = new Set();
@@ -58,6 +59,9 @@ const api = {
   health: () => call("GET", "/api/health"),
   accounts: () => call("GET", "/api/accounts"),
   proxies: () => call("GET", "/api/proxies"),
+  createProxy: (proxy) => call("POST", "/api/proxies", proxy),
+  setProxyStatus: (id, status) => call("PATCH", `/api/proxies/${encodeURIComponent(id)}/status`, { status }),
+  deleteProxy: (id) => call("DELETE", `/api/proxies/${encodeURIComponent(id)}`),
   pointChecks: () => call("GET", "/api/point-checks"),
   startPointCheck: (accountId) => call("POST", "/api/point-checks", { accountId }),
   importAccounts: (bundle) => call("POST", "/api/accounts/import", bundle),
@@ -158,6 +162,56 @@ function proxyOptions(currentId) {
   ].join("");
 }
 
+function renderProxyRows() {
+  const host = $("#proxyRows");
+  if (!host) return;
+  const proxies = state.proxies || [];
+  $("#proxyMeta").textContent = `${proxies.length} proxy`;
+  if (!proxies.length) {
+    host.innerHTML = '<tr><td colspan="7" class="empty-cell">Chưa có proxy trên VPS.</td></tr>';
+    return;
+  }
+  host.innerHTML = proxies.map((proxy) => {
+    const nextStatus = proxy.status === "disabled" ? "active" : "disabled";
+    const statusText = proxy.status === "active" ? "Đang hoạt động" : proxy.status;
+    return `<tr>
+      <td><strong>${escapeHtml(proxy.label)}</strong>${proxy.egressIp ? `<small class="proxy-subtext">Egress ${escapeHtml(proxy.egressIp)}</small>` : ""}</td>
+      <td class="mono">${escapeHtml(proxy.url || "")} : ${escapeHtml(proxy.port || "")}</td>
+      <td><span class="auth-state ${proxy.hasCredentials ? "ok" : "pending"}">${proxy.hasCredentials ? "Đã lưu" : "Không"}</span></td>
+      <td>${escapeHtml(proxy.accountCount || 0)}</td>
+      <td>${escapeHtml(proxy.accountCapacity || 1)}</td>
+      <td><span class="status-pill ${statusClass(proxy.status)}">${escapeHtml(statusText)}</span></td>
+      <td class="col-actions proxy-actions"><button class="detail-button" data-proxy-status="${escapeAttr(proxy.id)}" data-next-proxy-status="${nextStatus}">${nextStatus === "disabled" ? "Tắt" : "Bật"}</button><button class="detail-button danger" data-delete-proxy="${escapeAttr(proxy.id)}" data-proxy-label="${escapeAttr(proxy.label)}" ${proxy.accountCount ? "disabled title=\"Hãy tháo account trước\"" : ""}>Xóa</button></td>
+    </tr>`;
+  }).join("");
+  host.querySelectorAll("button[data-proxy-status]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api.setProxyStatus(button.dataset.proxyStatus, button.dataset.nextProxyStatus);
+      showToast("Đã cập nhật trạng thái proxy.");
+      await loadData();
+    } catch (error) { showToast(error.message, "error"); }
+  }));
+  host.querySelectorAll("button[data-delete-proxy]").forEach((button) => button.addEventListener("click", async () => {
+    const label = button.dataset.proxyLabel;
+    if (!window.confirm(`Xóa proxy ${label}?`)) return;
+    try {
+      await api.deleteProxy(button.dataset.deleteProxy);
+      showToast(`Đã xóa proxy ${label}.`);
+      await loadData();
+    } catch (error) { showToast(error.message, "error"); }
+  }));
+}
+
+function setView(view) {
+  state.activeView = view;
+  $("#accountWorkspace").hidden = view !== "accounts";
+  $("#proxyWorkspace").hidden = view !== "proxies";
+  $(".stats-grid").hidden = view !== "accounts";
+  $(".topbar h1").textContent = view === "proxies" ? "Quản lý proxy" : "Quản lý account";
+  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.action === view));
+  if (view === "proxies") renderProxyRows();
+}
+
 function renderRows() {
   refreshFiltered();
   const start = (state.page - 1) * state.pageSize;
@@ -246,6 +300,7 @@ async function loadData(showLoading = false) {
     state.pointCheckerError = pointChecks.reason.message;
   }
   renderRows();
+  if (state.activeView === "proxies") renderProxyRows();
 }
 
 async function refreshPointChecks() {
@@ -341,6 +396,27 @@ async function submitBulk(event) {
   } catch (error) { showToast(error.message, "error"); }
 }
 
+async function submitProxy(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form).entries());
+  const proxy = {
+    label: values.label.trim(),
+    url: values.url.trim(),
+    port: Number(values.port),
+    accountCapacity: Number(values.accountCapacity || 1),
+    cooldownSeconds: Number(values.cooldownSeconds || 0),
+    proxyHttp: form.elements.proxyHttp.checked,
+  };
+  for (const key of ["username", "password"]) if (values[key]?.trim()) proxy[key] = values[key].trim();
+  try {
+    await api.createProxy(proxy);
+    form.reset();
+    showToast(`Đã lưu proxy ${proxy.label}.`);
+    await loadData();
+  } catch (error) { showToast(error.message, "error"); }
+}
+
 function showAccountDetail(email) {
   const account = state.accounts.find((item) => item.email === email);
   if (!account) return;
@@ -370,6 +446,9 @@ async function runControl(action) {
 }
 
 function handleAction(action) {
+  if (action === "accounts") { setView("accounts"); loadData(true); return; }
+  if (action === "proxies") { setView("proxies"); loadData(true); return; }
+  if (action === "add" || action === "bulk") setView("accounts");
   if (action === "add") openDialog("#accountDialog");
   else if (action === "bulk") openDialog("#bulkDialog");
   else if (action === "run") runControl("start");
@@ -418,6 +497,7 @@ function bindEvents() {
   });
   $("#accountForm").addEventListener("submit", submitAccount);
   $("#bulkForm").addEventListener("submit", submitBulk);
+  $("#proxyForm").addEventListener("submit", submitProxy);
   $("#refreshButton").addEventListener("click", () => loadData(true));
   $("#searchInput").addEventListener("input", (event) => { state.search = event.target.value; state.page = 1; renderRows(); });
   $("#statusFilter").addEventListener("change", (event) => { state.status = event.target.value; state.page = 1; renderRows(); });
