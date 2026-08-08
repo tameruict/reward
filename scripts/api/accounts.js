@@ -1,4 +1,9 @@
-import { getDirname, getProjectRoot, loadAccounts as loadConfiguredAccounts } from '../utils.js'
+import {
+    getDirname,
+    getProjectRoot,
+    loadAccounts as loadConfiguredAccounts,
+    loadAccountsFromDatabase
+} from '../utils.js'
 
 const projectRoot = getProjectRoot(getDirname(import.meta.url))
 
@@ -64,6 +69,13 @@ function loadAccountsFromEnvObject(sourceEnv) {
 
 function loadConfiguredAccountList(sourceEnv) {
     if (sourceEnv !== process.env) return loadAccountsFromEnvObject(sourceEnv)
+
+    // The Account Manager stores credentials in the VPS database. Prefer it
+    // for dashboard-triggered runs even when an older VPS .env still says
+    // ACCOUNTS_SOURCE=env. Fall back to the legacy env source only when no
+    // database accounts exist.
+    const databaseAccounts = loadAccountsFromDatabase(projectRoot)
+    if (databaseAccounts?.length) return databaseAccounts
     return loadConfiguredAccounts(projectRoot)
 }
 
@@ -94,6 +106,39 @@ function accountToEnv(account, targetIndex) {
     }
 
     return env
+}
+
+/**
+ * Builds the complete account environment for a normal run.
+ *
+ * The dashboard account list is database-backed, while the bot still accepts
+ * accounts through ACCOUNT_N_* variables. Keep that translation inside the
+ * VPS API so decrypted credentials never cross the API boundary.
+ */
+export function buildAllAccountsEnv(sourceEnv = process.env) {
+    const databaseAccounts = loadAccountsFromDatabase(projectRoot)
+    const accounts = databaseAccounts?.length ? databaseAccounts : loadConfiguredAccountList(sourceEnv)
+    if (!accounts.length) {
+        const err = new Error('No active accounts found in the VPS account database.')
+        err.code = 'BAD_REQUEST'
+        throw err
+    }
+
+    const env = { ACCOUNTS_SOURCE: 'env' }
+    for (const key of Object.keys(sourceEnv)) {
+        if (/^ACCOUNT_\d+_/.test(key)) env[key] = ''
+    }
+
+    const normalized = accounts.map((account, position) => ({
+        ...account,
+        index: resolveAccountIndex(account, position + 1)
+    }))
+    normalized.forEach((account, position) => Object.assign(env, accountToEnv(account, position + 1)))
+
+    return {
+        env,
+        includedAccounts: normalized.map(({ index, email }) => ({ index, email }))
+    }
 }
 
 /**

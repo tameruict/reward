@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { ProcessManager } from './processManager.js'
-import { buildExcludedAccountsEnv, buildSingleAccountEnv, mergeAccountStats } from './accounts.js'
+import { buildAllAccountsEnv, buildExcludedAccountsEnv, buildSingleAccountEnv, mergeAccountStats } from './accounts.js'
 import {
     assignAccountProxy,
     deleteAccountRecords,
@@ -699,17 +699,27 @@ const requestHandler = async (req, res) => {
                         code: 'BAD_REQUEST'
                     })
                 }
+                let selection
                 if (body.accountIndex != null) {
-                    const selection = buildSingleAccountEnv(body.accountIndex)
+                    selection = buildSingleAccountEnv(body.accountIndex)
                     overrides.env = { ...(overrides.env || {}), ...selection.env }
                     selectedAccount = selection.account
                 } else if (body.excludedAccountIndexes != null) {
-                    const selection = buildExcludedAccountsEnv(body.excludedAccountIndexes)
+                    selection = buildExcludedAccountsEnv(body.excludedAccountIndexes)
                     overrides.env = { ...(overrides.env || {}), ...selection.env }
                     excludedAccounts = selection.excludedAccounts
+                } else {
+                    selection = buildAllAccountsEnv()
+                    overrides.env = { ...(overrides.env || {}), ...selection.env }
                 }
                 const info = pm.start(overrides)
-                return sendJson(res, 202, { started: true, selectedAccount, excludedAccounts, ...info })
+                return sendJson(res, 202, {
+                    started: true,
+                    selectedAccount,
+                    excludedAccounts,
+                    includedAccounts: selection.includedAccounts ?? null,
+                    ...info
+                })
             } catch (err) {
                 if (err.code === 'ALREADY_RUNNING') return sendJson(res, 409, { error: err.message, code: err.code })
                 if (err.code === 'BAD_REQUEST') return sendJson(res, 400, { error: err.message, code: err.code })
@@ -753,17 +763,27 @@ const requestHandler = async (req, res) => {
                         code: 'BAD_REQUEST'
                     })
                 }
+                let selection
                 if (body.accountIndex != null) {
-                    const selection = buildSingleAccountEnv(body.accountIndex)
+                    selection = buildSingleAccountEnv(body.accountIndex)
                     overrides.env = { ...(overrides.env || {}), ...selection.env }
                     selectedAccount = selection.account
                 } else if (body.excludedAccountIndexes != null) {
-                    const selection = buildExcludedAccountsEnv(body.excludedAccountIndexes)
+                    selection = buildExcludedAccountsEnv(body.excludedAccountIndexes)
                     overrides.env = { ...(overrides.env || {}), ...selection.env }
                     excludedAccounts = selection.excludedAccounts
+                } else {
+                    selection = buildAllAccountsEnv()
+                    overrides.env = { ...(overrides.env || {}), ...selection.env }
                 }
                 const info = await pm.restart(overrides)
-                return sendJson(res, 202, { restarted: true, selectedAccount, excludedAccounts, ...info })
+                return sendJson(res, 202, {
+                    restarted: true,
+                    selectedAccount,
+                    excludedAccounts,
+                    includedAccounts: selection.includedAccounts ?? null,
+                    ...info
+                })
             } catch (err) {
                 if (err.code === 'BAD_REQUEST') return sendJson(res, 400, { error: err.message, code: err.code })
                 return sendJson(res, 500, { error: err.message })
