@@ -2,6 +2,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { ProcessManager } from './processManager.js'
@@ -13,7 +14,7 @@ import {
     listManagedAccountRows,
     listProxyRows,
     setAccountStatus
-} from '../accountStore.js'
+} from '../accounts/store.js'
 import { validateConfig, deepMerge, readConfig, writeConfigAtomic } from './configEditor.js'
 import { readSchedule, writeSchedule } from './scheduleStore.js'
 import { deleteStoredSessions, listStoredSessions } from './sessionStore.js'
@@ -29,6 +30,7 @@ import {
     envInt,
     envBool
 } from './lib.js'
+import { findAccountByEmail, loadAccounts } from '../utils.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = getProjectRoot(__dirname)
@@ -74,6 +76,9 @@ const pm = new ProcessManager({
     name: pkgName,
     version: pkgVersion
 })
+
+const pointCheckInFlight = new Map()
+const pointCheckResults = new Map()
 
 const startedAt = Date.now()
 
@@ -252,6 +257,87 @@ function handleEventStream(req, res, url) {
     req.on('error', cleanup)
 }
 
+function runPointCheck(account) {
+    const accountId = String(account.accountId ?? '').trim()
+    if (!accountId) {
+        const error = new Error('The account has no database ID.')
+        error.code = 'BAD_REQUEST'
+        throw error
+    }
+    if (!account.proxy?.url) {
+        const error = new Error('Account has no assigned proxy; direct fallback is disabled.')
+        error.code = 'BAD_REQUEST'
+        throw error
+    }
+
+    const existing = pointCheckInFlight.get(accountId)
+    if (existing) return existing
+
+    const workerPath = path.join(projectRoot, 'points-checker', 'worker', 'checkAccount.js')
+    const timeoutMs = Math.min(Math.max(envInt('POINT_CHECK_TIMEOUT_MS', 180000), 30000), 900000)
+    const promise = new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [workerPath, accountId], {
+            cwd: projectRoot,
+            env: {
+                ...process.env,
+                POINT_CHECK_ACCOUNT_ID: accountId
+            },
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe']
+        })
+        let stdout = ''
+        let stderr = ''
+        let timedOut = false
+        const timer = setTimeout(() => {
+            timedOut = true
+            child.kill('SIGTERM')
+        }, timeoutMs)
+
+        child.stdout.on('data', chunk => {
+            stdout = `${stdout}${chunk.toString('utf8')}`.slice(-30000)
+        })
+        child.stderr.on('data', chunk => {
+            stderr = `${stderr}${chunk.toString('utf8')}`.slice(-12000)
+        })
+        child.on('error', error => {
+            clearTimeout(timer)
+            reject(Object.assign(error, { code: 'worker_start_failed' }))
+        })
+        child.on('exit', code => {
+            clearTimeout(timer)
+            const resultLine = stdout.split(/\r?\n/).find(line => line.startsWith('POINT_CHECK_RESULT='))
+            if (!timedOut && code === 0 && resultLine) {
+                try {
+                    return resolve(JSON.parse(resultLine.slice('POINT_CHECK_RESULT='.length)))
+                } catch {
+                    // Fall through to the standard worker error below.
+                }
+            }
+
+            const errorLine = stdout.split(/\r?\n/).find(line => line.startsWith('POINT_CHECK_ERROR='))
+            let detail = null
+            try {
+                detail = errorLine ? JSON.parse(errorLine.slice('POINT_CHECK_ERROR='.length)) : null
+            } catch {
+                detail = null
+            }
+            const message = timedOut
+                ? `Point check exceeded ${timeoutMs} ms.`
+                : detail?.message || stderr.trim() || stdout.trim() || `Point-check worker exited with code ${code}.`
+            reject(Object.assign(new Error(message), {
+                code: detail?.code || (timedOut ? 'timeout' : 'worker_failed')
+            }))
+        })
+    })
+    const tracked = promise.finally(() => pointCheckInFlight.delete(accountId))
+    pointCheckInFlight.set(accountId, tracked)
+    return tracked
+}
+
+function rememberPointCheck(email, result) {
+    pointCheckResults.set(String(email).trim().toLowerCase(), result)
+}
+
 const requestHandler = async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`)
     const pathname = url.pathname.replace(/\/+$/, '') || '/'
@@ -359,7 +445,10 @@ const requestHandler = async (req, res) => {
 
         // acc overv
         if (method === 'GET' && pathname === '/accounts') {
-            const accounts = mergeAccountStats(listManagedAccountRows(projectRoot), pm.getHistory().map(toHistoryRecord))
+            const accounts = mergeAccountStats(listManagedAccountRows(projectRoot), pm.getHistory().map(toHistoryRecord)).map(account => ({
+                ...account,
+                pointCheck: pointCheckResults.get(String(account.email).trim().toLowerCase()) ?? null
+            }))
             return sendJson(res, 200, { accounts, count: accounts.length })
         }
 
@@ -386,6 +475,36 @@ const requestHandler = async (req, res) => {
                 accounts: listManagedAccountRows(projectRoot),
                 proxies: listProxyRows(projectRoot)
             })
+        }
+
+        const pointCheckPathEmail = decodeAccountEmailPath(pathname, '/points-check')
+        if (method === 'POST' && pointCheckPathEmail) {
+            const account = findAccountByEmail(loadAccounts(projectRoot), pointCheckPathEmail)
+            if (!account) return sendJson(res, 404, { error: `Account not found or inactive: ${pointCheckPathEmail}.` })
+
+            try {
+                const result = await runPointCheck(account)
+                const check = {
+                    status: 'success',
+                    points: Number(result.points),
+                    lifetimePoints: result.lifetimePoints ?? null,
+                    lifetimePointsRedeemed: result.lifetimePointsRedeemed ?? null,
+                    country: result.country ?? null,
+                    checkedAt: result.checkedAt ?? new Date().toISOString()
+                }
+                rememberPointCheck(account.email, check)
+                return sendJson(res, 200, { accountId: account.accountId, email: account.email, lastCheck: check })
+            } catch (error) {
+                const check = {
+                    status: 'error',
+                    errorCode: error.code || 'error',
+                    errorMessage: String(error.message || error).slice(0, 800),
+                    checkedAt: new Date().toISOString()
+                }
+                rememberPointCheck(account.email, check)
+                pm.note('warn', `Point check failed for ${account.email}: ${check.errorMessage}`)
+                return sendJson(res, 200, { accountId: account.accountId, email: account.email, lastCheck: check })
+            }
         }
 
         const proxyPathEmail = decodeAccountEmailPath(pathname, '/proxy')

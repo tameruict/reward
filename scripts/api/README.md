@@ -69,7 +69,8 @@ when durable history is needed.
 
 - Node.js 24 or newer;
 - a built bot, normally with `dist/index.js` available;
-- the API files located under `scripts/api/` in the bot repository.
+- the API files located under `scripts/api/` in the bot repository;
+- account persistence and secret encryption located under `scripts/accounts/`.
 
 The implementation is platform-independent. Process-tree termination uses
 `taskkill` on Windows and process-group signals on Linux and macOS.
@@ -137,6 +138,21 @@ curl --request GET \
   --url http://127.0.0.1:3010/accounts \
   --header 'Authorization: Bearer YOUR_API_TOKEN'
 ```
+
+Check one account's Microsoft Rewards balance without running earning tasks. The
+Control API runs the checker on the same VPS database, proxy and encrypted
+credentials as the worker:
+
+```bash
+curl --request POST \
+  --url 'http://127.0.0.1:3010/accounts/user%40example.com/points-check' \
+  --header 'Authorization: Bearer YOUR_API_TOKEN'
+```
+
+The response contains `lastCheck.status` (`success` or `error`) and, on
+success, the current `lastCheck.points`. The account list also includes the
+most recent in-memory `pointCheck` value. No password, token or proxy secret is
+returned.
 
 List stored proxies and current account usage:
 

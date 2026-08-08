@@ -3,8 +3,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { DatabaseSync } from 'node:sqlite'
 import chalk from 'chalk'
-import { decryptAccountSecret } from './accountSecrets.js'
-import { parseProxyParts } from './proxyIdentity.js'
+import { decryptAccountSecret } from './accounts/secrets.js'
+import { parseProxyParts } from './accounts/proxy.js'
 
 const DEFAULT_ACCOUNTS_DB_PATH = path.join('data', 'accounts.db')
 
