@@ -64,6 +64,7 @@ const api = {
   assignProxy: (email, body) => call("PATCH", `/api/accounts/${encodeURIComponent(email)}/proxy`, body),
   setStatus: (email, status) => call("PATCH", `/api/accounts/${encodeURIComponent(email)}/status`, { status }),
   deleteAccount: (email) => call("DELETE", `/api/accounts/${encodeURIComponent(email)}`),
+  deleteAccounts: (emails) => call("DELETE", "/api/accounts", { emails }),
   logs: () => call("GET", "/api/logs"),
   control: (action) => call("POST", `/api/control/${action}`, {}),
 };
@@ -386,7 +387,7 @@ async function deleteSelected() {
   const emails = [...state.selected];
   if (!emails.length) return showToast("Chưa chọn account.", "warning");
   if (!window.confirm(`Xóa vĩnh viễn ${emails.length} account đã chọn?`)) return;
-  try { for (const email of emails) await api.deleteAccount(email); state.selected.clear(); showToast(`Đã xóa ${emails.length} account.`); await loadData(); } catch (error) { showToast(error.message, "error"); }
+  try { await api.deleteAccounts(emails); state.selected.clear(); showToast(`Đã xóa ${emails.length} account.`); await loadData(); } catch (error) { showToast(error.message, "error"); }
 }
 
 async function disableSelected() {

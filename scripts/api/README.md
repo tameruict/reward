@@ -237,6 +237,13 @@ curl --request PATCH \
 curl --request DELETE \
   --url 'http://127.0.0.1:3010/accounts/user%40example.com' \
   --header 'Authorization: Bearer YOUR_API_TOKEN'
+
+# Permanently delete several accounts atomically
+curl --request DELETE \
+  --url 'http://127.0.0.1:3010/accounts' \
+  --header 'Authorization: Bearer YOUR_API_TOKEN' \
+  --header 'Content-Type: application/json' \
+  --data '{"emails":["first@example.com","second@example.com"]}'
 ```
 
 Keep the API behind HTTPS/VPN, set a long random `API_TOKEN`, and do not put
@@ -405,6 +412,7 @@ server itself remains dependency-free.
 | `POST`   | `/accounts/import` | Import or update accounts and proxy records from JSON.  |
 | `PATCH`  | `/accounts/:email/proxy` | Assign, replace, or detach an account proxy.       |
 | `PATCH`  | `/accounts/:email/status` | Enable or disable an account.                    |
+| `DELETE` | `/accounts` | Permanently delete multiple accounts atomically.      |
 | `DELETE` | `/accounts/:email` | Permanently delete one account.                       |
 | `DELETE` | `/sessions/:email` | Delete only one account's mobile and desktop sessions.  |
 | `PUT`    | `/config`          | Replace the complete config after validation.           |
@@ -452,6 +460,7 @@ console.log(data)
         "POST /accounts/import",
         "PATCH /accounts/:email/proxy",
         "PATCH /accounts/:email/status",
+        "DELETE /accounts",
         "DELETE /accounts/:email",
         "GET /sessions",
         "GET /diagnostics",

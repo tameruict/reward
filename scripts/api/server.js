@@ -378,6 +378,7 @@ const requestHandler = async (req, res) => {
                     'POST /accounts/import',
                     'PATCH /accounts/:email/proxy',
                     'PATCH /accounts/:email/status',
+                    'DELETE /accounts (body: { emails: [...] })',
                     'DELETE /accounts/:email',
                     'GET /sessions',
                     'GET /diagnostics',
@@ -550,6 +551,14 @@ const requestHandler = async (req, res) => {
                     row => row.email.toLowerCase() === statusPathEmail.toLowerCase()
                 )
             })
+        }
+
+        if (method === 'DELETE' && pathname === '/accounts') {
+            requireIdleForAccountMutation()
+            const body = await readJsonBody(req)
+            const result = deleteAccountRecords(projectRoot, body?.emails)
+            pm.note('info', `Deleted ${result.deleted} account(s) via API.`)
+            return sendJson(res, 200, { deleted: true, ...result, dbPath: undefined })
         }
 
         const deletePathEmail = decodeAccountEmailPath(pathname)

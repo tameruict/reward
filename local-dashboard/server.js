@@ -218,6 +218,10 @@ async function handleApi(req, res, url) {
     );
   }
 
+  if (pathname === "/api/accounts" && method === "DELETE") {
+    return forward(res, "DELETE", "/accounts", await readJsonBody(req));
+  }
+
   const accountMatch = pathname.match(/^\/api\/accounts\/([^/]+)$/);
   if (accountMatch && method === "DELETE") {
     return forward(res, "DELETE", `/accounts/${accountMatch[1]}`);
