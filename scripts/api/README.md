@@ -416,7 +416,7 @@ server itself remains dependency-free.
 | `PATCH`  | `/proxies/:id/status` | Enable or disable one proxy.                         |
 | `DELETE` | `/accounts` | Permanently delete multiple accounts atomically.      |
 | `DELETE` | `/accounts/:email` | Permanently delete one account.                       |
-| `DELETE` | `/proxies/:id` | Delete an unused proxy record.                         |
+| `DELETE` | `/proxies/:id` | Delete a proxy and detach its assigned accounts to direct mode. |
 | `DELETE` | `/sessions/:email` | Delete only one account's mobile and desktop sessions.  |
 | `PUT`    | `/config`          | Replace the complete config after validation.           |
 | `PATCH`  | `/config`          | Deep-merge a partial config after validation.           |

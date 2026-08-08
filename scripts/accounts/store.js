@@ -583,11 +583,26 @@ export function deleteProxyRecord(projectRoot, proxyId) {
         assertNoActiveJobs(db)
         const proxy = db.prepare('SELECT id, label FROM proxies WHERE id = ?').get(normalizedId)
         if (!proxy) fail(`Proxy not found: ${normalizedId}.`)
-        const usage = Number(db.prepare('SELECT COUNT(*) AS value FROM accounts WHERE proxy_id = ?').get(normalizedId).value)
-        if (usage) fail(`Cannot delete proxy ${proxy.label} while ${usage} account(s) are assigned. Detach or reassign them first.`)
+        const boundAccounts = db
+            .prepare('SELECT email FROM accounts WHERE proxy_id = ? ORDER BY LOWER(email)')
+            .all(normalizedId)
+        const detachedEmails = boundAccounts.map(account => account.email)
+        if (detachedEmails.length) {
+            db.prepare(
+                `UPDATE accounts
+                 SET proxy_id = NULL, use_proxy = 0, updated_at = CURRENT_TIMESTAMP
+                 WHERE proxy_id = ?`
+            ).run(normalizedId)
+        }
         db.prepare('DELETE FROM proxies WHERE id = ?').run(normalizedId)
         db.exec('COMMIT')
-        return { id: proxy.id, label: proxy.label, deleted: true }
+        return {
+            id: proxy.id,
+            label: proxy.label,
+            deleted: true,
+            detached: detachedEmails.length,
+            detachedEmails
+        }
     } catch (error) {
         try { db.exec('ROLLBACK') } catch {}
         throw error

@@ -181,7 +181,7 @@ function renderProxyRows() {
       <td>${escapeHtml(proxy.accountCount || 0)}</td>
       <td>${escapeHtml(proxy.accountCapacity || 1)}</td>
       <td><span class="status-pill ${statusClass(proxy.status)}">${escapeHtml(statusText)}</span></td>
-      <td class="col-actions proxy-actions"><button class="detail-button" data-proxy-status="${escapeAttr(proxy.id)}" data-next-proxy-status="${nextStatus}">${nextStatus === "disabled" ? "Tắt" : "Bật"}</button><button class="detail-button danger" data-delete-proxy="${escapeAttr(proxy.id)}" data-proxy-label="${escapeAttr(proxy.label)}" ${proxy.accountCount ? "disabled title=\"Hãy tháo account trước\"" : ""}>Xóa</button></td>
+      <td class="col-actions proxy-actions"><button class="detail-button" data-proxy-status="${escapeAttr(proxy.id)}" data-next-proxy-status="${nextStatus}">${nextStatus === "disabled" ? "Tắt" : "Bật"}</button><button class="detail-button danger" data-delete-proxy="${escapeAttr(proxy.id)}" data-proxy-label="${escapeAttr(proxy.label)}">Xóa</button></td>
     </tr>`;
   }).join("");
   host.querySelectorAll("button[data-proxy-status]").forEach((button) => button.addEventListener("click", async () => {
@@ -193,10 +193,12 @@ function renderProxyRows() {
   }));
   host.querySelectorAll("button[data-delete-proxy]").forEach((button) => button.addEventListener("click", async () => {
     const label = button.dataset.proxyLabel;
-    if (!window.confirm(`Xóa proxy ${label}?`)) return;
+    const usage = Number(button.closest("tr")?.children[3]?.textContent || 0);
+    const warning = usage ? `\n\n${usage} account sẽ tự chuyển sang direct mode.` : "";
+    if (!window.confirm(`Xóa proxy ${label}?${warning}`)) return;
     try {
-      await api.deleteProxy(button.dataset.deleteProxy);
-      showToast(`Đã xóa proxy ${label}.`);
+      const result = await api.deleteProxy(button.dataset.deleteProxy);
+      showToast(result.detached ? `Đã xóa proxy ${label}, gỡ ${result.detached} account.` : `Đã xóa proxy ${label}.`);
       await loadData();
     } catch (error) { showToast(error.message, "error"); }
   }));

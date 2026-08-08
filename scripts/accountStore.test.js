@@ -297,10 +297,11 @@ test('proxy management supports proxy-only creation, status changes, and safe de
         assert.ok(assigned)
         assert.ok(unused)
 
-        assert.throws(
-            () => deleteProxyRecord(process.cwd(), assigned.id),
-            /while 1 account\(s\) are assigned/
-        )
+        const deletedAssigned = deleteProxyRecord(process.cwd(), assigned.id)
+        assert.equal(deletedAssigned.detached, 1)
+        assert.deepEqual(deletedAssigned.detachedEmails, ['assigned@example.com'])
+        assert.equal(listManagedAccountRows(process.cwd())[0].useProxy, false)
+        assert.equal(listManagedAccountRows(process.cwd())[0].proxy, null)
 
         const disabled = setProxyStatus(process.cwd(), unused.id, 'disabled')
         assert.equal(disabled.status, 'disabled')
