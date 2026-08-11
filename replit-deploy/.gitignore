@@ -1,0 +1,9 @@
+node_modules/
+dist/
+config.json
+.env
+data/*
+sessions/*
+diagnostics/
+*.log
+tmp-smoke-accounts.db*

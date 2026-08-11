@@ -1,0 +1,34 @@
+modules = ["nodejs-24", "python-base-3.13"]
+
+entrypoint = "scripts/replit/run-api.js"
+run = "npm run replit:api"
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+build = "npm run build"
+run = "npm run replit:api:run"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+API_PORT = "8080"
+
+[[ports]]
+localPort = 8080
+externalPort = 80
