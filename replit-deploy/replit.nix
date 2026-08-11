@@ -9,6 +9,7 @@
     pkgs.glib
     pkgs.gtk3
     pkgs.nss
+    pkgs.nspr
     pkgs.alsa-lib
     pkgs.at-spi2-atk
     pkgs.pango
