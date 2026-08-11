@@ -16,6 +16,7 @@
         "start": "node --no-warnings ./dist/index.js",
         "replit:start": "npm run build && node ./scripts/replit/run-once.js",
         "replit:run": "node ./scripts/replit/run-once.js",
+        "replit:build": "npm run build && npm run replit:browser-smoke",
         "replit:api": "npm run build && node ./scripts/replit/run-api.js",
         "replit:api:run": "node ./scripts/replit/run-api.js",
         "replit:browser-smoke": "node ./scripts/replit/browser-smoke.mjs",
