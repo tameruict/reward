@@ -10,6 +10,9 @@
     pkgs.gtk3
     pkgs.nss
     pkgs.nspr
+    pkgs.dbus
+    pkgs.cups
+    pkgs.expat
     pkgs.alsa-lib
     pkgs.at-spi2-atk
     pkgs.pango

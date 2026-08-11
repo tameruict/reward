@@ -6,7 +6,7 @@ run = "npm run replit:api"
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
-build = "npm run build"
+build = "PLAYWRIGHT_BROWSERS_PATH=0 npm run build"
 run = "npm run replit:api:run"
 
 [deployment.postBuild]
@@ -28,6 +28,7 @@ timeoutMs = 20000
 
 [userenv.shared]
 API_PORT = "8080"
+PLAYWRIGHT_BROWSERS_PATH = "0"
 
 [[ports]]
 localPort = 8080
