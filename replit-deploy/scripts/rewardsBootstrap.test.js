@@ -5,6 +5,7 @@ import test from 'node:test'
 const require = createRequire(import.meta.url)
 const { default: BrowserFunc, RewardsAuthenticationRequiredError } = require('../dist/browser/BrowserFunc.js')
 const { Login } = require('../dist/browser/auth/Login.js')
+const { EmailLogin } = require('../dist/browser/auth/methods/EmailLogin.js')
 
 function createBot() {
     const warnings = []
@@ -258,4 +259,89 @@ test('Rewards session logging rethrows the original error instead of undefined',
     )
     assert.equal(errors.length, 1)
     assert.match(errors[0][2], /Timeout 30000ms exceeded/)
+})
+
+test('Microsoft OAuth email selector supports the current and legacy form shapes', async () => {
+    const { bot } = createBot()
+    let inputValue = ''
+    let clickedSelector = ''
+    const selectors = []
+
+    bot.browser = {
+        utils: {
+            ghostClick: async (_page, selector) => {
+                clickedSelector = selector
+                return true
+            }
+        }
+    }
+
+    const page = {
+        waitForSelector: async selector => {
+            selectors.push(selector)
+            return {}
+        },
+        inputValue: async () => inputValue,
+        fill: async (_selector, value) => {
+            inputValue = value
+        }
+    }
+
+    const result = await new EmailLogin(bot).enterEmail(page, 'account@example.com')
+
+    assert.equal(result, 'ok')
+    assert.match(selectors[0], /usernameEntry/)
+    assert.match(selectors[0], /loginfmt/)
+    assert.match(clickedSelector, /primaryButton/)
+    assert.equal(inputValue, 'account@example.com')
+})
+
+test('a disappeared email form is retried without reporting false success', async () => {
+    const { bot } = createBot()
+    bot.browser = { utils: { ghostClick: async () => true } }
+    const page = {
+        waitForSelector: async () => null
+    }
+
+    const emailLogin = new EmailLogin(bot)
+    assert.equal(await emailLogin.enterEmail(page, 'account@example.com'), 'retry')
+
+    const login = new Login(bot)
+    login.emailLogin.enterEmail = async () => 'retry'
+    login.waitForIdle = async () => {
+        throw new Error('waitForIdle must not run after a transient email-state race')
+    }
+
+    assert.equal(
+        await login.handleState('EMAIL_INPUT', page, {
+            email: 'account@example.com',
+            password: 'not-a-real-password'
+        }),
+        true
+    )
+})
+
+test('OAuth state detection does not wait for networkidle and recognizes loginfmt', async () => {
+    const { bot } = createBot()
+    const waits = []
+    bot.config = { errorDiagnostics: false }
+    bot.utils.wait = async milliseconds => waits.push(milliseconds)
+    bot.browser = {
+        utils: {
+            checkSuspendedAccount: async () => false
+        }
+    }
+
+    const login = new Login(bot)
+    login.funcaptchaLogin.isPresent = async () => false
+
+    const page = {
+        url: () => 'https://login.live.com/oauth20_authorize.srf',
+        locator: selector => ({
+            isVisible: async () => selector.includes('input[name="loginfmt"]')
+        })
+    }
+
+    assert.equal(await login.detectCurrentState(page, { email: 'account@example.com' }), 'EMAIL_INPUT')
+    assert.deepEqual(waits, [250])
 })

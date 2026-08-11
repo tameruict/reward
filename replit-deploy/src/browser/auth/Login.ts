@@ -57,8 +57,8 @@ export class Login {
         passwordIcon: '[data-testid="tile"]:has(svg path[d*="M11.78 10.22a.75.75"])',
         accountLocked: '#serviceAbuseLandingTitle',
         errorAlert: 'div[role="alert"]',
-        passwordEntry: '[data-testid="passwordEntry"]',
-        emailEntry: 'input#usernameEntry',
+        passwordEntry: '[data-testid="passwordEntry"], input[name="passwd"], input[type="password"]',
+        emailEntry: 'input#usernameEntry, input[name="loginfmt"], input[type="email"]',
         kmsiVideo: '[data-testid="kmsiVideo"]',
         passKeyVideo: '[data-testid="biometricVideo"]',
         passKeyError: '[data-testid="registrationImg"]',
@@ -109,7 +109,11 @@ export class Login {
     }
 
     private async detectCurrentState(page: Page, account?: Account): Promise<LoginState> {
-        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {})
+        // login.live.com keeps background requests alive and Patchright can
+        // calculate a slightly negative remaining timeout while waiting for
+        // networkidle. The state machine already polls once per second, so a
+        // short deterministic render delay is both safer and faster here.
+        await this.bot.utils.wait(250)
 
         const url = new URL(page.url())
         this.bot.logger.debug(this.bot.isMobile, 'DETECT-STATE', `Current URL: ${url.hostname}${url.pathname}`)
@@ -239,15 +243,15 @@ export class Login {
 
     private async checkSelector(page: Page, selector: string): Promise<boolean> {
         return page
-            .waitForSelector(selector, { state: 'visible', timeout: 200 })
-            .then(() => true)
+            .locator(selector)
+            .isVisible()
             .catch(() => false)
     }
 
     private async waitForIdle(page: Page, note: string, timeout = 5000): Promise<void> {
-        await page.waitForLoadState('networkidle', { timeout }).catch(() => {
-            this.bot.logger.debug(this.bot.isMobile, 'LOGIN', `Network idle timeout: ${note}`)
-        })
+        const settleMs = Math.min(Math.max(timeout, 250), 1500)
+        await this.bot.utils.wait(settleMs)
+        this.bot.logger.debug(this.bot.isMobile, 'LOGIN', `Settled ${settleMs}ms: ${note}`)
     }
 
     private async tryClick(page: Page, selector: string, label: string, timeout = 2000): Promise<boolean> {
@@ -295,7 +299,12 @@ export class Login {
 
             case 'EMAIL_INPUT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Entering email')
-                await this.emailLogin.enterEmail(page, account.email)
+                const result = await this.emailLogin.enterEmail(page, account.email)
+                if (result === 'retry') {
+                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', 'Email form changed; rechecking login state')
+                    return true
+                }
+                if (result !== 'ok') return false
                 await this.waitForIdle(page, 'after email entry')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Email entered successfully')
                 return true
@@ -303,7 +312,12 @@ export class Login {
 
             case 'PASSWORD_INPUT': {
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Entering password')
-                await this.emailLogin.enterPassword(page, account.password)
+                const result = await this.emailLogin.enterPassword(page, account.password)
+                if (result === 'retry') {
+                    this.bot.logger.debug(this.bot.isMobile, 'LOGIN', 'Password form changed; rechecking login state')
+                    return true
+                }
+                if (result !== 'ok') return false
                 await this.waitForIdle(page, 'after password entry')
                 this.bot.logger.info(this.bot.isMobile, 'LOGIN', 'Password entered successfully')
                 return true
@@ -479,11 +493,14 @@ export class Login {
             case 'UNKNOWN': {
                 const rawUrl = page.url()
                 const url = new URL(rawUrl)
-                this.bot.logger.warn(
-                    this.bot.isMobile,
-                    'LOGIN',
-                    `Unknown state at ${url.hostname}${url.pathname}, waiting`
-                )
+                const oauthRendering =
+                    url.hostname === 'login.live.com' && url.pathname.toLowerCase().includes('oauth20_authorize')
+                const message = oauthRendering
+                    ? `Microsoft OAuth page is still rendering at ${url.pathname}, waiting`
+                    : `Unknown state at ${url.hostname}${url.pathname}, waiting`
+
+                if (oauthRendering) this.bot.logger.debug(this.bot.isMobile, 'LOGIN', message)
+                else this.bot.logger.warn(this.bot.isMobile, 'LOGIN', message)
 
                 if (this.bot.config.errorDiagnostics && !this.capturedUnknownUrls.has(rawUrl)) {
                     this.capturedUnknownUrls.add(rawUrl)
