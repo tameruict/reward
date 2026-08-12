@@ -9,6 +9,9 @@ const publicPort = Number(process.env.PORT || 3000)
 const apiPort = Number(process.env.REPLIT_INTERNAL_API_PORT || 3010)
 const dashboardUsername = String(process.env.DASHBOARD_USERNAME || '').trim()
 const dashboardPassword = String(process.env.DASHBOARD_PASSWORD || '')
+const dashboardPasswordSalt = String(process.env.DASHBOARD_PASSWORD_SALT || '')
+const dashboardPasswordHash = String(process.env.DASHBOARD_PASSWORD_HASH || '')
+const dashboardHashConfigured = Boolean(dashboardPasswordSalt && /^[a-f0-9]{64}$/i.test(dashboardPasswordHash))
 const allowInsecure = /^(1|true|yes)$/i.test(String(process.env.REPLIT_ALLOW_INSECURE_DASHBOARD || ''))
 
 if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) {
@@ -17,9 +20,9 @@ if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) {
 if (!Number.isInteger(apiPort) || apiPort < 1 || apiPort > 65535 || apiPort === publicPort) {
     throw new Error(`REPLIT_INTERNAL_API_PORT must be valid and different from PORT (received ${apiPort})`)
 }
-if ((!dashboardUsername || !dashboardPassword) && !allowInsecure) {
+if ((!dashboardUsername || (!dashboardPassword && !dashboardHashConfigured)) && !allowInsecure) {
     throw new Error(
-        'Refusing to expose the Replit dashboard without authentication. Set DASHBOARD_USERNAME and DASHBOARD_PASSWORD as Replit Secrets.'
+        'Refusing to expose the Replit dashboard without authentication. Configure DASHBOARD_USERNAME plus DASHBOARD_PASSWORD or its scrypt hash.'
     )
 }
 if (!fs.existsSync(path.join(projectRoot, 'dist', 'index.js'))) {
@@ -68,7 +71,9 @@ async function shutdown(signal, exitCode = 0) {
 
 async function runSelfTest() {
     const deadline = Date.now() + 30000
-    const authorization = `Basic ${Buffer.from(`${dashboardUsername}:${dashboardPassword}`).toString('base64')}`
+    const smokePassword = String(process.env.REPLIT_SMOKE_PASSWORD || dashboardPassword)
+    if (!smokePassword) throw new Error('REPLIT_SMOKE_PASSWORD is required when self-testing hashed auth')
+    const authorization = `Basic ${Buffer.from(`${dashboardUsername}:${smokePassword}`).toString('base64')}`
     let lastError
 
     while (Date.now() < deadline) {
@@ -120,11 +125,13 @@ launch('dashboard', path.join(projectRoot, 'local-dashboard', 'server.js'), {
     CONTROL_API_URL: `http://127.0.0.1:${apiPort}`,
     CONTROL_API_TOKEN: internalToken,
     DASHBOARD_USERNAME: dashboardUsername,
-    DASHBOARD_PASSWORD: dashboardPassword
+    DASHBOARD_PASSWORD: dashboardPassword,
+    DASHBOARD_PASSWORD_SALT: dashboardPasswordSalt,
+    DASHBOARD_PASSWORD_HASH: dashboardPasswordHash
 })
 
 process.stdout.write(
-    `[replit] Microsoft Point started | public=0.0.0.0:${publicPort} | api=127.0.0.1:${apiPort} | dashboardAuth=${dashboardUsername && dashboardPassword ? 'enabled' : 'disabled'}\n`
+    `[replit] Microsoft Point started | public=0.0.0.0:${publicPort} | api=127.0.0.1:${apiPort} | dashboardAuth=${dashboardUsername && (dashboardPassword || dashboardHashConfigured) ? 'enabled' : 'disabled'}\n`
 )
 
 if (process.env.REPLIT_SELF_TEST === 'true') void runSelfTest()

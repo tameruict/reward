@@ -2,5 +2,10 @@ entrypoint = "scripts/replit/start.js"
 run = "npm run replit:start"
 modules = ["nodejs-24"]
 
+[env]
+DASHBOARD_USERNAME = "microsoft-point"
+DASHBOARD_PASSWORD_SALT = "4329a763ae2c276f9ee3c0fdf2152405"
+DASHBOARD_PASSWORD_HASH = "5ad0de5748f826c7a371b7b25925a2facaf998058f771f751fe68bed54342656"
+
 [deployment]
 run = ["sh", "-c", "npm run replit:start"]

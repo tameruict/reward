@@ -9,6 +9,10 @@ Required Replit Secrets:
 - `DASHBOARD_USERNAME`
 - `DASHBOARD_PASSWORD`
 
+The checked-in Replit profile may instead provide a strong scrypt password
+hash and salt, keeping the plaintext password out of source and deployment
+configuration. `DASHBOARD_PASSWORD` as a Secret overrides that hash.
+
 Build command:
 
 ```sh

@@ -14,7 +14,14 @@ const CONTROL_API_URL = process.env.CONTROL_API_URL || "http://127.0.0.1:3010";
 const CONTROL_API_TOKEN = process.env.CONTROL_API_TOKEN || "";
 const DASHBOARD_USERNAME = process.env.DASHBOARD_USERNAME || "";
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "";
-const DASHBOARD_AUTH_ENABLED = Boolean(DASHBOARD_USERNAME && DASHBOARD_PASSWORD);
+const DASHBOARD_PASSWORD_SALT = process.env.DASHBOARD_PASSWORD_SALT || "";
+const DASHBOARD_PASSWORD_HASH = process.env.DASHBOARD_PASSWORD_HASH || "";
+const DASHBOARD_HASH_AUTH_ENABLED = Boolean(
+  DASHBOARD_PASSWORD_SALT && /^[a-f0-9]{64}$/i.test(DASHBOARD_PASSWORD_HASH),
+);
+const DASHBOARD_AUTH_ENABLED = Boolean(
+  DASHBOARD_USERNAME && (DASHBOARD_PASSWORD || DASHBOARD_HASH_AUTH_ENABLED),
+);
 const PUBLIC_DIR = path.resolve(__dirname, "public");
 const client = new ControlApiClient({
   baseUrl: CONTROL_API_URL,
@@ -71,10 +78,18 @@ function requestBasicCredentials(req) {
 function isAuthorized(req) {
   if (!DASHBOARD_AUTH_ENABLED) return true;
   const credentials = requestBasicCredentials(req);
+  const passwordMatches = credentials && DASHBOARD_PASSWORD
+    ? safeEqual(credentials.password, DASHBOARD_PASSWORD)
+    : credentials && DASHBOARD_HASH_AUTH_ENABLED
+      ? safeEqual(
+        crypto.scryptSync(credentials.password, DASHBOARD_PASSWORD_SALT, 32),
+        Buffer.from(DASHBOARD_PASSWORD_HASH, "hex"),
+      )
+      : false;
   return Boolean(
     credentials &&
       safeEqual(credentials.username, DASHBOARD_USERNAME) &&
-      safeEqual(credentials.password, DASHBOARD_PASSWORD),
+      passwordMatches,
   );
 }
 
