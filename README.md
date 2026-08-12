@@ -89,6 +89,8 @@ email@example.com|email-password|host:port:proxy-user:proxy-password
 
 Rows containing only email and password are distributed evenly across active proxies already stored in the database. A proxy included in the row is created or updated automatically. To intentionally re-import addresses recorded in `deleted_accounts`, add `--restore-deleted`:
 
+The dashboard/API also accepts a compact proxy line directly: `host:port:username:password` (for example `14.224.225.129:28682:tam:tam317`). It is normalized to an HTTP proxy, receives a stable automatic label, and can then be assigned to accounts from the account management table. Passwords are encrypted in the account database and never returned by the dashboard.
+
 ```bash
 npm run accounts:import -- ./accounts.local.txt --restore-deleted
 ```

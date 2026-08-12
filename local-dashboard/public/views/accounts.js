@@ -345,6 +345,31 @@ async function reloadManagement() {
   await context.refresh();
 }
 
+function parseImportText(raw) {
+  const text = String(raw || "").trim();
+  if (!text) throw new Error("Paste an account, proxy, or JSON bundle first.");
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const proxies = [];
+    const accounts = [];
+    for (const line of lines) {
+      const parts = line.split(":");
+      if (!line.includes("@") && parts.length >= 4 && /^\d{1,5}$/.test(parts[1])) {
+        proxies.push(line);
+        continue;
+      }
+      const [email, password, proxyLabel] = (line.includes("|") ? line.split("|") : line.split(",")).map((value) => value.trim());
+      if (!email || !email.includes("@")) throw new Error(`Invalid account or proxy line: ${line}`);
+      accounts.push({ email: email.toLowerCase(), password, proxyLabel, useProxy: Boolean(proxyLabel) });
+    }
+    if (!proxies.length && !accounts.length) throw new Error("No valid account or proxy found.");
+    return { proxies, accounts, allowDirectAccounts: true };
+  }
+}
+
 export default {
   id: "accounts",
   label: "Accounts",
@@ -358,8 +383,8 @@ export default {
       <div class="panel account-management-panel">
         <div class="panel-head"><h2>Remote account management</h2></div>
         <div class="panel-body">
-          <p class="hint">Import JSON from this page, then assign a stored proxy to each account. Passwords and proxy credentials are sent only to the protected control API and are never displayed again.</p>
-          <textarea id="accountImportJson" rows="8" spellcheck="false" placeholder='{"proxies":[{"label":"proxy-01","url":"proxy.example.com","port":8000}],"accounts":[{"email":"user@example.com","password":"...","proxyLabel":"proxy-01"}]}'></textarea>
+          <p class="hint">Paste JSON, one account per line, or a proxy as <code>host:port:user:password</code>. Proxy labels are generated automatically and can be assigned below.</p>
+          <textarea id="accountImportJson" rows="8" spellcheck="false" placeholder='14.224.225.129:28682:tam:tam317&#10;user@example.com|password|proxy-label'></textarea>
           <div class="account-management-actions">
             <button type="button" class="btn btn-primary" id="importAccountsButton">Import / update accounts</button>
             <button type="button" class="btn" id="clearAccountImportButton">Clear</button>
@@ -376,7 +401,7 @@ export default {
     U.$("#importAccountsButton", root).addEventListener("click", async () => {
       const input = U.$("#accountImportJson", root);
       try {
-        const bundle = JSON.parse(input.value);
+        const bundle = parseImportText(input.value);
         await context.api.importAccounts(bundle);
         input.value = "";
         context.toast("Accounts and proxies imported.", "success");

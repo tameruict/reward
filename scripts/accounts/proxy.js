@@ -13,6 +13,27 @@ function encodeUrlPart(value) {
 }
 
 export function parseProxyParts(proxy) {
+    const rawInput = typeof proxy === 'string'
+        ? proxy.trim()
+        : String(proxy?.url ?? proxy?.host ?? '').trim()
+    // Accept the compact proxy format used by most providers:
+    // host:port:username:password. Split only the first three separators so
+    // passwords containing ':' remain intact.
+    if (rawInput && !/^[a-z][a-z\d+.-]*:\/\//i.test(rawInput) && !rawInput.includes('@')) {
+        const first = rawInput.indexOf(':')
+        const second = first < 0 ? -1 : rawInput.indexOf(':', first + 1)
+        const third = second < 0 ? -1 : rawInput.indexOf(':', second + 1)
+        if (first > 0 && second > first + 1 && third > second + 1) {
+            return {
+                protocol: 'http',
+                host: rawInput.slice(0, first).trim(),
+                port: Number(proxy?.port) || Number(rawInput.slice(first + 1, second).trim()),
+                username: decodeUrlPart(String(proxy?.username ?? '').trim() || rawInput.slice(second + 1, third).trim()),
+                password: decodeUrlPart(String(proxy?.password ?? '') || rawInput.slice(third + 1))
+            }
+        }
+    }
+
     const rawUrl = String(proxy?.url ?? proxy?.host ?? '').trim()
     if (!rawUrl) {
         return {

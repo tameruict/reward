@@ -153,8 +153,8 @@
     <dialog id="bulkDialog" class="modal-dialog wide">
       <form id="bulkForm" method="dialog">
         <div class="modal-header"><div><p class="eyebrow">BULK IMPORT</p><h2>Nhập nhiều account</h2></div><button type="button" class="close-button" data-close-dialog>×</button></div>
-        <p class="modal-help">Dùng JSON chuẩn hoặc mỗi dòng một account theo thứ tự: <code>email | password | recoveryEmail | totpSecret | proxyLabel</code>.</p>
-        <textarea id="bulkInput" name="bulkInput" rows="13" spellcheck="false" placeholder='{"accounts":[{"email":"user@example.com","password":"...","useProxy":false}],"allowDirectAccounts":true}'></textarea>
+        <p class="modal-help">Dùng JSON, mỗi dòng một account (<code>email | password | recoveryEmail | totpSecret | proxyLabel</code>), hoặc dán proxy trực tiếp dạng <code>host:port:user:password</code>.</p>
+            <textarea id="bulkInput" name="bulkInput" rows="13" spellcheck="false" placeholder='Dán account mỗi dòng: email|password|proxy-label&#10;Hoặc dán proxy trực tiếp: 14.224.225.129:28682:tam:tam317&#10;Hoặc JSON {"accounts":[...],"proxies":[...]}'></textarea>
         <div class="modal-actions"><button type="button" class="button ghost" data-close-dialog>Hủy</button><button type="submit" class="button primary">Import lên VPS</button></div>
       </form>
     </dialog>

@@ -362,14 +362,21 @@ function parseBulkInput(raw) {
     return parsed;
   } catch (error) {
     if (error instanceof SyntaxError) {
-      const accounts = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).map((line) => {
+      const accounts = [];
+      const proxies = [];
+      text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).forEach((line) => {
+        const proxyParts = line.split(":");
+        if (!line.includes("@") && proxyParts.length >= 4 && /^\d{1,5}$/.test(proxyParts[1])) {
+          proxies.push(line);
+          return;
+        }
         const fields = line.includes("|") ? line.split("|") : line.split(",");
         const [email, password, recoveryEmail, totpSecret, proxyLabel] = fields.map((field) => field.trim());
         if (!email || !email.includes("@")) throw new Error(`Email không hợp lệ: ${email}`);
-        return { email: email.toLowerCase(), password, recoveryEmail, totpSecret, proxyLabel, useProxy: Boolean(proxyLabel) };
+        accounts.push({ email: email.toLowerCase(), password, recoveryEmail, totpSecret, proxyLabel, useProxy: Boolean(proxyLabel) });
       });
-      if (!accounts.length) throw new Error("Không tìm thấy account hợp lệ.");
-      return { accounts, allowDirectAccounts: true };
+      if (!accounts.length && !proxies.length) throw new Error("Không tìm thấy account hoặc proxy hợp lệ.");
+      return { accounts, proxies, allowDirectAccounts: true };
     }
     throw error;
   }

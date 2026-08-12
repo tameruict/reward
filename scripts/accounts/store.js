@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { ensureAccountsDatabase, resolveAccountsDbPath } from '../utils.js'
 import { encryptAccountSecret } from './secrets.js'
-import { formatProxyUrl, parseProxyParts, proxyIdentityKey } from './proxy.js'
+import { automaticProxyLabel, formatProxyUrl, parseProxyParts, proxyIdentityKey } from './proxy.js'
 
 const ACCOUNT_STATUSES = new Set(['ready', 'active', 'disabled', 'error', 'cooldown'])
 const PROXY_STATUSES = new Set(['active', 'disabled', 'error', 'cooldown'])
@@ -36,9 +36,11 @@ function stableId(prefix, value) {
 }
 
 function normalizeProxy(raw, fallbackLabel) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Each proxy must be a JSON object.')
+    if (typeof raw === 'string') raw = { url: raw }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Each proxy must be a JSON object or host:port:user:password string.')
 
-    const label = text(raw.label, fallbackLabel)
+    const parsedForLabel = parseProxyParts(raw)
+    const label = text(raw.label, fallbackLabel || automaticProxyLabel(parsedForLabel))
     const parsedProxy = parseProxyParts(raw)
     const url = text(formatProxyUrl(parsedProxy))
     const port = positiveInt(parsedProxy.port, 0, `Proxy ${label || '(unlabelled)'} port`)
