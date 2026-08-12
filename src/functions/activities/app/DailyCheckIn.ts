@@ -1,0 +1,122 @@
+import { URLs } from '../../../constants/urls'
+import { buildAppHeaders } from '../../../browser/DeviceIdentity'
+import type { HttpRequestConfig } from '../../../util/Http'
+import { randomUUID } from 'crypto'
+import { Workers } from '../../Workers'
+
+export class DailyCheckIn extends Workers {
+    private gainedPoints: number = 0
+
+    private oldBalance: number = this.bot.userData.currentPoints
+
+    public async doDailyCheckIn() {
+        if (!this.bot.accessToken) {
+            this.bot.logger.warn(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                'Skipping: App access token not available, this activity requires it!'
+            )
+            return
+        }
+
+        this.oldBalance = Number(this.bot.userData.currentPoints ?? 0)
+
+        this.bot.logger.info(
+            this.bot.isMobile,
+            'DAILY-CHECK-IN',
+            `Starting Daily Check-In | geo=${this.bot.userData.geoLocale} | currentBalance=${this.oldBalance}`
+        )
+
+        try {
+            const response = await this.submitDaily()
+
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                `Received Daily Check-In response | status=${response?.status ?? 'unknown'}`
+            )
+
+            const newBalance = Number(response?.data?.response?.balance ?? this.oldBalance)
+            this.gainedPoints = newBalance - this.oldBalance
+
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                `Balance delta after Daily Check-In | type=103 | previousBalance=${this.oldBalance} | currentBalance=${newBalance} | pointsGained=${this.gainedPoints}`
+            )
+
+            if (this.gainedPoints > 0) {
+                this.bot.userData.currentPoints = newBalance
+                this.bot.userData.gainedPoints = (this.bot.userData.gainedPoints ?? 0) + this.gainedPoints
+
+                this.bot.logger.info(
+                    this.bot.isMobile,
+                    'DAILY-CHECK-IN',
+                    `Completed Daily Check-In | type=103 | pointsGained=${this.gainedPoints} | currentBalance=${newBalance}`,
+                    'green'
+                )
+            } else {
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'DAILY-CHECK-IN',
+                    `Daily Check-In completed but no points gained | type=103 | pointsGained=0 | currentBalance=${newBalance}`
+                )
+            }
+        } catch (error) {
+            this.bot.logger.error(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                `Error during Daily Check-In | message=${error instanceof Error ? error.message : String(error)}`
+            )
+        }
+    }
+
+    private async submitDaily() {
+        try {
+            const jsonData = {
+                risk_context: {},
+                type: 103,
+                channel: this.bot.mobileDevice.channel,
+                attributes: {},
+                id: randomUUID(),
+                amount: 1,
+                country: this.bot.userData.geoLocale
+            }
+
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                `Preparing Daily Check-In payload | type=${jsonData.type} | id=${jsonData.id} | amount=${jsonData.amount} | country=${jsonData.country}`
+            )
+
+            const request: HttpRequestConfig = {
+                url: URLs.platform.activities,
+                method: 'POST',
+                headers: buildAppHeaders({
+                    accessToken: this.bot.accessToken,
+                    geoLocale: this.bot.userData.geoLocale,
+                    langCode: this.bot.userData.langCode,
+                    device: this.bot.mobileDevice,
+                    appUserAgent: this.bot.appUserAgent,
+                    extra: { 'Content-Type': 'application/json' }
+                }),
+                data: JSON.stringify(jsonData)
+            }
+
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                `Sending Daily Check-In request | type=${jsonData.type} | url=${request.url}`
+            )
+
+            return this.bot.http.request<{ response?: { balance?: number } }>(request)
+        } catch (error) {
+            this.bot.logger.error(
+                this.bot.isMobile,
+                'DAILY-CHECK-IN',
+                `Error in submitDaily | message=${error instanceof Error ? error.message : String(error)}`
+            )
+            throw error
+        }
+    }
+}

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#1f2328" />
+    <title>Account Manager · VPS Worker</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-card">
+          <div class="brand-mark">A</div>
+          <div>
+            <strong>Account Manager</strong>
+            <span>Local control plane</span>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <p class="sidebar-label">Quản lý</p>
+          <button class="nav-item active" data-action="accounts"><span class="nav-icon">▦</span> Danh sách account</button>
+          <button class="nav-item" data-action="add"><span class="nav-icon">＋</span> Thêm account</button>
+          <button class="nav-item" data-action="bulk"><span class="nav-icon">⇩</span> Nhập hàng loạt</button>
+          <button class="nav-item" data-action="proxies"><span class="nav-icon">⌁</span> Proxy</button>
+        </div>
+
+        <div class="sidebar-section">
+          <p class="sidebar-label">Vận hành VPS</p>
+          <button class="nav-item" data-action="run"><span class="nav-icon">▶</span> Chạy worker</button>
+          <button class="nav-item" data-action="stop"><span class="nav-icon">■</span> Dừng worker</button>
+          <button class="nav-item" data-action="refresh"><span class="nav-icon">↻</span> Làm mới dữ liệu</button>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="connection-mini"><span id="connectionDot" class="status-dot offline"></span><span id="connectionText">Đang kết nối VPS…</span></div>
+          <span id="apiUrlLabel" class="api-url-label">Control API</span>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">VPS WORKER / ACCOUNT CONTROL</p>
+            <h1>Quản lý account</h1>
+          </div>
+          <div class="topbar-actions">
+            <span id="workerBadge" class="worker-badge unknown"><span class="status-dot"></span><span id="workerState">Chưa rõ trạng thái</span></span>
+            <button class="icon-button" id="refreshButton" title="Làm mới" aria-label="Làm mới">↻</button>
+          </div>
+        </header>
+
+        <div id="notice" class="notice" hidden></div>
+
+        <section class="stats-grid" aria-label="Thống kê account">
+          <article class="stat-card blue"><span>Tổng account</span><strong id="statTotal">0</strong><small>đang lưu trên VPS</small></article>
+          <article class="stat-card orange"><span>Đang hoạt động</span><strong id="statReady">0</strong><small>sẵn sàng cho worker</small></article>
+          <article class="stat-card green"><span>Đã cấu hình</span><strong id="statConfigured">0</strong><small>email và secret đã lưu</small></article>
+          <article class="stat-card purple"><span>Có proxy</span><strong id="statProxy">0</strong><small>được gán proxy</small></article>
+          <article class="stat-card red"><span>Vô hiệu / lỗi</span><strong id="statIssues">0</strong><small>cần kiểm tra</small></article>
+        </section>
+
+        <div id="accountWorkspace">
+        <section class="workspace-card">
+          <div class="toolbar">
+            <div class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Tìm email, trạng thái, proxy…" autocomplete="off" /></div>
+            <select id="statusFilter" aria-label="Lọc trạng thái">
+              <option value="all">Tất cả trạng thái</option>
+              <option value="ready">Sẵn sàng</option>
+              <option value="active">Đang chạy</option>
+              <option value="disabled">Đã vô hiệu</option>
+              <option value="error">Lỗi</option>
+              <option value="cooldown">Cooldown</option>
+            </select>
+            <select id="pageSize" aria-label="Số dòng mỗi trang"><option>25</option><option>50</option><option>100</option></select>
+            <span id="tableMeta" class="table-meta">0 account</span>
+            <div class="toolbar-spacer"></div>
+            <button class="button ghost" data-action="bulk">＋ Nhập hàng loạt</button>
+            <button class="button primary" data-action="add">＋ Thêm account</button>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th class="col-id">ID</th><th class="col-check"><input id="selectAll" type="checkbox" aria-label="Chọn tất cả" /></th>
+                  <th>Email</th><th>Loại</th><th>Khu vực</th><th>Proxy</th><th>Trạng thái</th><th>Auth</th><th>Check point Microsoft Rewards</th><th>Updated</th><th class="col-actions">Chi tiết</th>
+                </tr>
+              </thead>
+              <tbody id="accountRows"><tr><td colspan="11" class="empty-cell">Đang tải danh sách account từ VPS…</td></tr></tbody>
+            </table>
+          </div>
+
+          <div class="table-footer">
+            <div class="bulk-actions"><span id="selectedCount">0 đã chọn</span><button class="text-button danger" id="deleteSelected">Xóa đã chọn</button><button class="text-button" id="disableSelected">Vô hiệu hóa</button></div>
+            <div class="pagination"><button id="prevPage" class="page-button">‹</button><span id="pageLabel">Trang 1 / 1</span><button id="nextPage" class="page-button">›</button></div>
+          </div>
+        </section>
+
+        <section class="bottom-grid">
+          <article class="panel-card task-panel"><div class="panel-heading"><div><p class="eyebrow">WORKER CONTROL</p><h2>Tác vụ hiện tại</h2></div><button class="button primary small" data-action="run">Chạy tất cả</button></div><div id="taskSummary" class="task-summary"><span class="task-icon">✓</span><div><strong>Worker đang chờ</strong><small>Account được chạy trên VPS, không chạy trên máy local.</small></div></div></article>
+          <article class="panel-card log-panel"><div class="panel-heading"><div><p class="eyebrow">REMOTE LOG</p><h2>Log worker</h2></div><button id="clearLog" class="button ghost small">Xóa hiển thị</button></div><pre id="logOutput">Chưa có log mới.</pre></article>
+        </section>
+        </div>
+
+        <section id="proxyWorkspace" class="proxy-workspace" hidden>
+          <div class="workspace-card">
+            <div class="toolbar"><div><p class="eyebrow">PROXY POOL</p><h2>Quản lý proxy</h2></div><span id="proxyMeta" class="table-meta">0 proxy</span><div class="toolbar-spacer"></div><button class="button ghost" data-action="refresh">↻ Làm mới</button></div>
+            <form id="proxyForm" class="proxy-form">
+              <div class="form-grid">
+                <label>Label <input name="label" required placeholder="proxy-vn-01" /></label>
+                <label>URL / host <input name="url" required placeholder="proxy.example.com" /></label>
+                <label>Port <input name="port" type="number" min="1" required placeholder="8000" /></label>
+                <label>Account capacity <input name="accountCapacity" type="number" min="1" value="1" /></label>
+                <label>Username <input name="username" placeholder="Không bắt buộc" /></label>
+                <label>Password <input name="password" type="password" placeholder="Không bắt buộc" /></label>
+                <label>Cooldown seconds <input name="cooldownSeconds" type="number" min="0" value="0" /></label>
+                <label class="proxy-form-check"><input name="proxyHttp" type="checkbox" /> HTTP proxy</label>
+              </div>
+              <div class="modal-actions"><button type="reset" class="button ghost">Xóa form</button><button type="submit" class="button primary">Lưu proxy</button></div>
+            </form>
+          </div>
+          <div class="workspace-card proxy-list-card">
+            <div class="panel-heading"><div><p class="eyebrow">STORED PROXIES</p><h2>Danh sách proxy</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Label</th><th>Endpoint</th><th>Auth</th><th>Đang dùng</th><th>Capacity</th><th>Trạng thái</th><th class="col-actions">Thao tác</th></tr></thead><tbody id="proxyRows"><tr><td colspan="7" class="empty-cell">Đang tải proxy từ VPS…</td></tr></tbody></table></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="accountDialog" class="modal-dialog">
+      <form id="accountForm" method="dialog">
+        <div class="modal-header"><div><p class="eyebrow">ACCOUNT INPUT</p><h2>Thêm / cập nhật account</h2></div><button type="button" class="close-button" data-close-dialog>×</button></div>
+        <p class="modal-help">Secret chỉ được gửi qua dashboard local tới Control API trên VPS và không xuất hiện trong bảng.</p>
+        <div class="form-grid">
+          <label>Email <input name="email" type="email" required placeholder="user@example.com" /></label>
+          <label>Password <input name="password" type="password" placeholder="Bỏ trống nếu cập nhật account cũ" /></label>
+          <label>Email khôi phục <input name="recoveryEmail" type="email" placeholder="recovery@example.com" /></label>
+          <label>TOTP secret <input name="totpSecret" type="password" placeholder="Không bắt buộc" /></label>
+          <label>Trạng thái <select name="status"><option value="ready">Sẵn sàng</option><option value="disabled">Vô hiệu</option></select></label>
+          <label>Proxy label <input name="proxyLabel" placeholder="proxy-vn-01" /></label>
+          <label class="full">Proxy URL <input name="proxyUrl" placeholder="proxy.example.com" /></label>
+          <label>Proxy port <input name="proxyPort" type="number" min="1" placeholder="8000" /></label>
+          <label>Proxy username <input name="proxyUsername" placeholder="Không bắt buộc" /></label>
+          <label>Proxy password <input name="proxyPassword" type="password" placeholder="Không bắt buộc" /></label>
+        </div>
+        <div class="modal-actions"><button type="button" class="button ghost" data-close-dialog>Hủy</button><button type="submit" class="button primary">Lưu account</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="bulkDialog" class="modal-dialog wide">
+      <form id="bulkForm" method="dialog">
+        <div class="modal-header"><div><p class="eyebrow">BULK IMPORT</p><h2>Nhập nhiều account</h2></div><button type="button" class="close-button" data-close-dialog>×</button></div>
+        <p class="modal-help">Dùng JSON chuẩn hoặc mỗi dòng một account theo thứ tự: <code>email | password | recoveryEmail | totpSecret | proxyLabel</code>.</p>
+        <textarea id="bulkInput" name="bulkInput" rows="13" spellcheck="false" placeholder='{"accounts":[{"email":"user@example.com","password":"...","useProxy":false}],"allowDirectAccounts":true}'></textarea>
+        <div class="modal-actions"><button type="button" class="button ghost" data-close-dialog>Hủy</button><button type="submit" class="button primary">Import lên VPS</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="detailDialog" class="modal-dialog detail-dialog"><div class="modal-header"><div><p class="eyebrow">ACCOUNT DETAIL</p><h2 id="detailTitle">Account</h2></div><button type="button" class="close-button" data-close-dialog>×</button></div><div id="detailBody" class="detail-body"></div></dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

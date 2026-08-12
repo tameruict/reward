@@ -1,0 +1,19 @@
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime state
+/node_modules/
+/dist/
+/data/*
+/sessions/*
+/diagnostics/
+/config.json
+/config/config.json
+/config/schedule.json
+
+# Account input files (keep only the redacted examples)
+/accounts.import.txt
+/accounts.local.txt
+/accounts-mail-pass-proxy.txt

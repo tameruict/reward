@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Rewards Points Checker</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#overview" aria-label="Rewards Points Checker home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M16 3 20 11l9 1-6.5 6.3L24 27l-8-4.2L8 27l1.5-8.7L3 12l9-1 4-8Z"/></svg>
+        </span>
+        <span><strong>Rewards</strong> Points Checker</span>
+      </a>
+      <div class="connection" id="connection"><span class="connection-dot"></span><span>Đang kết nối</span></div>
+    </header>
+
+    <nav class="tabs" aria-label="Điều hướng chính">
+      <button class="tab active" data-view="overview">Tổng quan</button>
+      <button class="tab" data-view="accounts">Tài khoản</button>
+      <button class="tab" data-view="history">Lịch sử</button>
+      <button class="tab" data-view="runs">Lượt chạy</button>
+    </nav>
+
+    <main class="shell">
+      <section class="page-heading">
+        <div>
+          <h1 id="pageTitle">Kiểm tra điểm tài khoản</h1>
+          <p id="pageDescription">Đọc số dư qua proxy đã gán, không thực hiện nhiệm vụ kiếm điểm.</p>
+        </div>
+        <div class="actions">
+          <button class="button secondary" id="refreshButton">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 8.5A7 7 0 0 1 18.8 7M5.2 17A7 7 0 0 0 17.9 15.5"/></svg>
+            Làm mới
+          </button>
+          <button class="button secondary" id="stopButton" hidden>Dừng lượt chạy</button>
+          <button class="button primary" id="checkSelectedButton" disabled>Check đã chọn</button>
+          <button class="button primary" id="checkAllButton">Check tất cả</button>
+        </div>
+      </section>
+
+      <div class="notice" id="notice" hidden></div>
+
+      <section class="view active" id="view-overview">
+        <div class="metrics" id="metrics" aria-live="polite">
+          <article class="metric"><span class="metric-label">Tài khoản hoạt động</span><strong id="metricAccounts">—</strong><small>trong database</small></article>
+          <article class="metric accent"><span class="metric-label">Tổng số điểm</span><strong id="metricPoints">—</strong><small>lần check gần nhất</small></article>
+          <article class="metric"><span class="metric-label">Đã check thành công</span><strong id="metricChecked">—</strong><small id="metricCheckedSub">chưa có dữ liệu</small></article>
+          <article class="metric"><span class="metric-label">Lỗi gần nhất</span><strong id="metricFailed">—</strong><small id="metricFailedSub">cần kiểm tra lại</small></article>
+          <article class="metric"><span class="metric-label">Proxy đang dùng</span><strong id="metricProxies">—</strong><small>mỗi proxy một luồng</small></article>
+        </div>
+
+        <section class="panel run-panel" id="activeRunPanel" hidden>
+          <div class="panel-heading">
+            <div><h2>Lượt check đang chạy</h2><p id="runStatusText">Đang chuẩn bị</p></div>
+            <strong id="runProgressText">0 / 0</strong>
+          </div>
+          <div class="progress-track"><span id="runProgressBar"></span></div>
+          <div class="live-log" id="liveLog" aria-live="polite"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><h2>Tài khoản gần đây</h2><p>Điểm, proxy và kết quả check mới nhất</p></div>
+            <button class="text-button" data-go="accounts">Xem tất cả</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Tài khoản</th><th>Proxy</th><th>Trạng thái</th><th class="number">Điểm</th><th class="number">Thay đổi</th><th>Lần check</th></tr></thead><tbody id="overviewRows"></tbody></table></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-accounts">
+        <section class="panel">
+          <div class="panel-heading accounts-heading">
+            <div><h2>Danh sách tài khoản</h2><p id="selectionSummary">Chưa chọn tài khoản</p></div>
+            <div class="filters"><input id="accountSearch" type="search" placeholder="Tìm email hoặc proxy…" autocomplete="off"><select id="statusFilter"><option value="all">Mọi trạng thái</option><option value="success">Thành công</option><option value="error">Có lỗi</option><option value="suspended">Bị đình chỉ</option><option value="locked">Bị khóa</option><option value="unchecked">Chưa check</option></select></div>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th class="select-cell"><input type="checkbox" id="selectAll" aria-label="Chọn tất cả tài khoản hiển thị"></th><th>Slot</th><th>Tài khoản</th><th>Proxy</th><th>Trạng thái</th><th class="number">Điểm</th><th class="number">Thay đổi</th><th>Quốc gia</th><th>Thời gian</th></tr></thead><tbody id="accountRows"></tbody></table></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-history">
+        <section class="panel history-panel">
+          <div class="panel-heading">
+            <div><h2>Lịch sử số dư</h2><p>Biến động điểm theo các lần kiểm tra thành công</p></div>
+            <select id="historyAccount" aria-label="Chọn tài khoản"></select>
+          </div>
+          <div class="chart-empty" id="historyEmpty">Chọn một tài khoản để xem lịch sử.</div>
+          <div class="chart" id="historyChart" hidden>
+            <div class="chart-summary"><strong id="historyCurrent">—</strong><span id="historyDelta">—</span></div>
+            <svg id="historySvg" viewBox="0 0 900 260" role="img" aria-label="Biểu đồ lịch sử điểm"></svg>
+            <div class="chart-axis"><span id="historyStart">—</span><span id="historyEnd">—</span></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-runs">
+        <section class="panel">
+          <div class="panel-heading"><div><h2>Lịch sử lượt chạy</h2><p>Mỗi lượt check và kết quả tổng hợp</p></div></div>
+          <div class="runs-list" id="runsList"></div>
+        </section>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/api.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,6 @@
+entrypoint = "scripts/replit/start.js"
+run = "npm run replit:start"
+modules = ["nodejs-24"]
+
+[deployment]
+run = ["sh", "-c", "npm run replit:start"]
