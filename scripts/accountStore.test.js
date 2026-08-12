@@ -152,7 +152,7 @@ test('one proxy may hold more than six accounts but still schedules one proxy la
     })
 })
 
-test('importAccountBundle stores full proxy URLs with embedded credentials', () => {
+test('importAccountBundle separates and encrypts credentials embedded in proxy URLs', () => {
     withTemporaryAccountStore(() => {
         importAccountBundle(process.cwd(), {
             proxies: [{ label: 'full-url-proxy', url: 'http://tam:tam317@14.224.225.129:28682' }],
@@ -161,11 +161,15 @@ test('importAccountBundle stores full proxy URLs with embedded credentials', () 
 
         const db = new DatabaseSync(process.env.ACCOUNTS_DB_PATH, { readOnly: true })
         try {
-            const proxy = db.prepare('SELECT url, port, username FROM proxies WHERE label = ?').get('full-url-proxy')
+            const proxy = db
+                .prepare('SELECT url, port, username, password FROM proxies WHERE label = ?')
+                .get('full-url-proxy')
 
-            assert.equal(proxy.url, 'http://tam:tam317@14.224.225.129:28682')
+            assert.equal(proxy.url, 'http://14.224.225.129')
             assert.equal(proxy.port, 28682)
             assert.equal(proxy.username, 'tam')
+            assert.match(proxy.password, /^enc:v1:/)
+            assert.doesNotMatch(proxy.url, /tam317/)
         } finally {
             db.close()
         }
